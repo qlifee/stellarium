@@ -638,7 +638,8 @@ jobs:
             }
           }
           foreach ($apiSymbol in @(
-              'singleton@StelApp',
+              'isInitialized@StelApp',
+              'getInstance@StelApp',
               'getModule@StelApp')) {
             if (-not (Select-String -LiteralPath $dllExports `
                 -SimpleMatch $apiSymbol) -or
@@ -805,12 +806,17 @@ jobs:
             }
             if ($probe.Id -eq 'StellariumStateProbe') {
               foreach ($apiSymbol in @(
-                  'singleton@StelApp',
+                  'isInitialized@StelApp',
+                  'getInstance@StelApp',
                   'getModule@StelApp')) {
                 if (-not (Select-String -LiteralPath $imports `
                     -SimpleMatch $apiSymbol)) {
                   throw "StellariumStateProbe does not import $apiSymbol"
                 }
+              }
+              if (Select-String -LiteralPath $imports `
+                  -SimpleMatch 'singleton@StelApp') {
+                throw 'StellariumStateProbe unexpectedly imports the private StelApp singleton'
               }
             }
 

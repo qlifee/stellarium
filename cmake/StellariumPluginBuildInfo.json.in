@@ -17,7 +17,7 @@
   "msvc_runtime": "@STELLARIUM_PLUGIN_ABI_MSVC_RUNTIME@",
   "compatibility_policy": "Plug-ins must match this exact Stellarium release and package build identity, architecture, compiler family and toolset, Qt build, build configuration, and MSVC runtime. Compatibility with other Stellarium releases or separately rebuilt packages is not guaranteed.",
   "api_scope": "api_headers are the supported entry headers. dependency_headers are installed only to satisfy their includes. supported_headers is retained as a compatibility alias for installed_headers. This proof validates only validated_operations; other declarations and exported stelMain symbols are not implicitly endorsed.",
-  "abi_notes": "The validated inline StelApp::isInitialized() and getInstance() operations depend on matching private data and class layout. Use only this exact SDK/package pair and consume all required compile definitions through Stellarium::stelMain.",
+  "abi_notes": "In the validated MSVC DLL build, STELMAIN_USE_DLL makes the class-level STELMAIN_EXPORT resolve to Q_DECL_IMPORT, so the plug-in imports StelApp::isInitialized(), getInstance(), and getModule() from stelMain.dll, including the first two operations whose source declarations are inline. They do not directly import the private singleton data. This remains a private C++ class ABI: use only this exact SDK/package pair and consume all required compile definitions through Stellarium::stelMain.",
   "validated_capabilities": [
     "plugin-interface metadata",
     "module construction and initialization",

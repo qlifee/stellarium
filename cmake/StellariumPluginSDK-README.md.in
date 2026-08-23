@@ -22,12 +22,15 @@ visible from `stelMain.dll` are not implicitly endorsed, even if the compiler
 or linker can see them.
 
 For `StelApp`, this proof specifically validates `isInitialized()`,
-`getInstance()`, and `getModule()`. The first two are inline and depend on the
-matching private singleton data and class layout, so they are supported only by
-this archive's exact-build contract and required compile definitions. Other
-inline accessors may have similar dependencies, and forward-declared return
-types require future SDK headers before they can be used. Treat them as outside
-this proof's API surface.
+`getInstance()`, and `getModule()`. Although the first two are declared inline,
+the validated MSVC DLL contract uses `STELMAIN_USE_DLL` to make the class-level
+`STELMAIN_EXPORT` resolve to `Q_DECL_IMPORT`. The external probe therefore
+imports all three functions from `stelMain.dll` instead of directly importing
+the private singleton data. This is still a private C++ class ABI supported
+only by this archive's exact-build contract and required compile definitions.
+Other inline accessors may compile differently or touch private layout, and
+forward-declared return types require future SDK headers before they can be
+used. Treat them as outside this proof's API surface.
 
 The imported `Stellarium::stelMain` target supplies these definitions from the
 matching Stellarium build:
