@@ -1,0 +1,212 @@
+name: Windows dynamic plugin proof
+
+on:
+  push:
+    branches:
+      - windows-dynamic-plugin-poc
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUILD_DIR: build-msvc
+  INSTALL_DIR: stellarium-install
+  DIAG_DIR: diagnostics
+  CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+jobs:
+  qt6-msvc-x64:
+    name: Qt 6.9.3 / MSVC 2022 / x64 / Release
+    runs-on: windows-2022
+    timeout-minutes: 180
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out Stellarium
+        uses: actions/checkout@v6
+
+      - name: Install Qt 6.9.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          aqtversion: '==3.3.*'
+          version: '6.9.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+          modules: >-
+            qt5compat qtcharts qtimageformats qtlocation qtmultimedia
+            qtpositioning qtquicktimeline qtscxml qtsensors qtserialbus
+            qtserialport qtshadertools qtspeech qtvirtualkeyboard
+            qtwebchannel qtwebengine qtwebsockets qtwebview
+
+      - name: Configure the DLL split
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installPrefix = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          cmake -S . -B $env:BUILD_DIR `
+            -G 'Visual Studio 17 2022' -A x64 `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" `
+            "-DCMAKE_INSTALL_PREFIX=$installPrefix" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGENERATE_STELMAINLIB=ON `
+            -DGENERATE_PACKAGE_TARGET=OFF `
+            -DSTELLARIUM_RELEASE_BUILD=OFF `
+            -DSCM_SHOULD_ENABLE_CONVERTER=OFF `
+            -DENABLE_TESTING=ON `
+            -DENABLE_NLS=OFF `
+            -DENABLE_PODIR=OFF
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake configure failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Build
+        run: |
+          cmake --build $env:BUILD_DIR --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) {
+            throw "Build failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Install
+        run: |
+          cmake --install $env:BUILD_DIR --config Release
+          if ($LASTEXITCODE -ne 0) {
+            throw "Install failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify DLL, import library, and exports
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+
+          $exe = Join-Path $installRoot 'bin/stellarium.exe'
+          $dll = Join-Path $installRoot 'bin/stelMain.dll'
+          $importLibrary = Join-Path $installRoot 'lib/stelMain.lib'
+
+          foreach ($path in @($exe, $dll, $importLibrary)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required build artifact is missing: $path"
+            }
+            if ((Get-Item -LiteralPath $path).Length -eq 0) {
+              throw "Required build artifact is empty: $path"
+            }
+          }
+
+          $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+          if ($null -eq $dumpbin) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+            $dumpbin = & $vswhere -latest -products * `
+              -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+              -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' |
+              Select-Object -First 1
+          }
+          if (-not $dumpbin) {
+            throw 'Unable to locate dumpbin.exe'
+          }
+
+          function Invoke-Dumpbin {
+            param(
+              [string] $OutputPath,
+              [string[]] $Arguments
+            )
+
+            $output = & $dumpbin @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+            $output | Set-Content -LiteralPath $OutputPath -Encoding utf8
+            if ($exitCode -ne 0) {
+              throw "dumpbin failed with exit code $exitCode"
+            }
+          }
+
+          $exeDependencies = Join-Path $diagnostics 'stellarium-dependencies.txt'
+          $dllDependencies = Join-Path $diagnostics 'stelMain-dependencies.txt'
+          $dllExports = Join-Path $diagnostics 'stelMain-exports.txt'
+          $importMembers = Join-Path $diagnostics 'stelMain-import-library.txt'
+
+          Invoke-Dumpbin $exeDependencies @('/DEPENDENTS', $exe)
+          Invoke-Dumpbin $dllDependencies @('/DEPENDENTS', $dll)
+          Invoke-Dumpbin $dllExports @('/EXPORTS', $dll)
+          Invoke-Dumpbin $importMembers @('/LINKERMEMBER:1', $importLibrary)
+
+          if (-not (Select-String -LiteralPath $exeDependencies -Pattern 'stelMain\.dll')) {
+            throw 'stellarium.exe does not depend on stelMain.dll'
+          }
+
+          foreach ($symbolOwner in @('StelApp', 'StelModule', 'StelTranslator')) {
+            if (-not (Select-String -LiteralPath $dllExports -Pattern $symbolOwner)) {
+              throw "No exported symbol containing $symbolOwner was found"
+            }
+          }
+
+          Get-FileHash -Algorithm SHA256 -LiteralPath $exe, $dll, $importLibrary |
+            Format-Table -AutoSize |
+            Out-String |
+            Set-Content -LiteralPath (Join-Path $diagnostics 'sha256.txt') -Encoding utf8
+
+          "Verified: stellarium.exe loads stelMain.dll." | Add-Content $env:GITHUB_STEP_SUMMARY
+          "Verified: stelMain.lib exists for external MSVC consumers." | Add-Content $env:GITHUB_STEP_SUMMARY
+          "Verified: required Stellarium symbol families are exported." | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Run DLL-linked smoke test
+        run: |
+          $spoutDir = Join-Path $env:GITHUB_WORKSPACE 'util/spout2/x64'
+          $env:PATH = "$spoutDir;$env:PATH"
+          ctest --test-dir $env:BUILD_DIR `
+            -C Release `
+            --output-on-failure `
+            -R '^(testDates|testStelFileMgr)$'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Focused tests failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Collect build metadata
+        if: always()
+        run: |
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+
+          $cache = Join-Path $env:BUILD_DIR 'CMakeCache.txt'
+          if (Test-Path -LiteralPath $cache) {
+            Copy-Item -LiteralPath $cache -Destination $diagnostics -Force
+          }
+
+          Get-ChildItem -Path $env:BUILD_DIR -Recurse -File `
+            -Filter 'windeployqt*' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              Copy-Item -LiteralPath $_.FullName `
+                -Destination (Join-Path $diagnostics $_.Name) -Force
+            }
+
+          $qmake = Get-Command qmake.exe -ErrorAction SilentlyContinue
+          $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
+          $metadata = [ordered]@{
+            runner = $env:ImageOS
+            architecture = 'x64'
+            configuration = 'Release'
+            generator = 'Visual Studio 17 2022'
+            qt_root = $env:QT_ROOT_DIR
+            qt_version = if ($qmake) { & $qmake.Source -query QT_VERSION } else { $null }
+            compiler_path = if ($cl) { $cl.Source } else { $null }
+            compiler_version = if ($cl) { $cl.FileVersionInfo.ProductVersion } else { $null }
+          }
+          $metadata | ConvertTo-Json |
+            Set-Content -LiteralPath (Join-Path $diagnostics 'build-metadata.json') -Encoding utf8
+
+      - name: Upload proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stellarium-26.2-windows-dynamic-plugin-proof
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ env.INSTALL_DIR }}/bin/stellarium.exe
+            ${{ env.INSTALL_DIR }}/bin/stelMain.dll
+            ${{ env.INSTALL_DIR }}/lib/stelMain.lib
+            ${{ env.DIAG_DIR }}/
