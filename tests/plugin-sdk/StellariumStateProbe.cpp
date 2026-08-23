@@ -39,6 +39,17 @@ StellariumStateProbe::StellariumStateProbe()
 
 void StellariumStateProbe::init()
 {
+	// Solar System positions are refreshed by the host's update loop after
+	// plug-in initialization. Defer the one-shot proof until that has happened.
+	probePending = true;
+}
+
+void StellariumStateProbe::update(double)
+{
+	if(!probePending)
+		return;
+	probePending = false;
+
 	const QString moduleVersion = getModuleVersion();
 	const bool versionMatches =
 		moduleVersion == QStringLiteral(STELLARIUM_EXPECTED_VERSION);
@@ -47,6 +58,9 @@ void StellariumStateProbe::init()
 	bool solarSystemAvailable = false;
 	bool solarSystemIdentityMatches = false;
 	QVariantMap coreState;
+	QVariantMap sunState;
+	QVariantMap moonState;
+	QVariantMap lowerCaseMoonState;
 
 	if(appInitialized)
 	{
@@ -58,11 +72,29 @@ void StellariumStateProbe::init()
 		solarSystemAvailable = solarSystem != nullptr;
 		solarSystemIdentityMatches = solarSystemAvailable &&
 			solarSystem->objectName() == QStringLiteral("SolarSystem");
-		coreState = StelPluginAPI::getCoreStateSnapshot(app.getCore());
+		const StelCore* core = app.getCore();
+		coreState = StelPluginAPI::getCoreStateSnapshot(core);
+		sunState = StelPluginAPI::getSolarSystemBodyStateSnapshot(
+			core, QStringLiteral("Sun"));
+		moonState = StelPluginAPI::getSolarSystemBodyStateSnapshot(
+			core, QStringLiteral("Moon"));
+		lowerCaseMoonState =
+			StelPluginAPI::getSolarSystemBodyStateSnapshot(
+				core, QStringLiteral("moon"));
 	}
 
 	const bool nullCoreReturnsEmpty =
 		StelPluginAPI::getCoreStateSnapshot(nullptr).isEmpty();
+	const bool nullBodyCoreReturnsEmpty =
+		StelPluginAPI::getSolarSystemBodyStateSnapshot(
+			nullptr, QStringLiteral("Moon")).isEmpty();
+	const bool emptyBodyIdReturnsEmpty = appInitialized &&
+		StelPluginAPI::getSolarSystemBodyStateSnapshot(
+			StelApp::getInstance().getCore(), QString()).isEmpty();
+	const bool unknownBodyReturnsEmpty = appInitialized &&
+		StelPluginAPI::getSolarSystemBodyStateSnapshot(
+			StelApp::getInstance().getCore(),
+			QStringLiteral("NotARealSolarSystemBody")).isEmpty();
 	const bool coreStateAvailable = !coreState.isEmpty();
 	const bool coreStateSchemaMatches = coreStateAvailable &&
 		coreState.value(QStringLiteral("schemaVersion")).toInt() == 1;
@@ -116,9 +148,117 @@ void StellariumStateProbe::init()
 		!coreState.value(QStringLiteral("locationId")).toString().isEmpty() &&
 		!coreState.value(QStringLiteral("planetName")).toString().isEmpty();
 
+	const auto hasBaseBodyStateTypes = [](const QVariantMap& state)
+	{
+		return
+			hasType(state, QStringLiteral("schemaVersion"), QMetaType::Int) &&
+			hasType(state, QStringLiteral("englishName"), QMetaType::QString) &&
+			hasType(state, QStringLiteral("julianDayUt"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("julianDayTt"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("rightAscensionJ2000Degrees"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("declinationJ2000Degrees"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("azimuthGeometricDegrees"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("altitudeGeometricDegrees"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("distanceAu"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("angularDiameterUnscaledDegrees"), QMetaType::Double) &&
+			hasType(state, QStringLiteral("aberrationEnabled"), QMetaType::Bool) &&
+			hasType(state, QStringLiteral("topocentricCoordinatesEnabled"), QMetaType::Bool) &&
+			hasType(state, QStringLiteral("phaseDataAvailable"), QMetaType::Bool);
+	};
+	const bool sunStateAvailable = !sunState.isEmpty();
+	const bool moonStateAvailable = !moonState.isEmpty();
+	const bool bodyStateSchemaMatches = sunStateAvailable &&
+		moonStateAvailable &&
+		sunState.value(QStringLiteral("schemaVersion")).toInt() == 1 &&
+		moonState.value(QStringLiteral("schemaVersion")).toInt() == 1;
+	const bool bodyIdentitiesMatch = bodyStateSchemaMatches &&
+		sunState.value(QStringLiteral("englishName")).toString() ==
+			QStringLiteral("Sun") &&
+		moonState.value(QStringLiteral("englishName")).toString() ==
+			QStringLiteral("Moon");
+	const bool sunPhaseUnavailable = bodyStateSchemaMatches &&
+		!sunState.value(QStringLiteral("phaseDataAvailable")).toBool() &&
+		!sunState.contains(QStringLiteral("illuminatedFraction")) &&
+		!sunState.contains(QStringLiteral("phaseAngleDegrees")) &&
+		!sunState.contains(QStringLiteral("elongationDegrees"));
+	const bool moonPhaseAvailable = bodyStateSchemaMatches &&
+		moonState.value(QStringLiteral("phaseDataAvailable")).toBool();
+	const bool bodyStateTypesMatch = bodyStateSchemaMatches &&
+		sunState.size() == 13 && moonState.size() == 16 &&
+		hasBaseBodyStateTypes(sunState) &&
+		hasBaseBodyStateTypes(moonState) &&
+		hasType(moonState, QStringLiteral("illuminatedFraction"),
+		        QMetaType::Double) &&
+		hasType(moonState, QStringLiteral("phaseAngleDegrees"),
+		        QMetaType::Double) &&
+		hasType(moonState, QStringLiteral("elongationDegrees"),
+		        QMetaType::Double);
+	const bool bodyLookupCaseInsensitive = bodyStateTypesMatch &&
+		lowerCaseMoonState == moonState;
+	const bool bodyStateTimesMatch = bodyStateTypesMatch &&
+		std::abs(sunState.value(QStringLiteral("julianDayUt")).toDouble() -
+		         julianDayUt) <= 1e-12 &&
+		std::abs(sunState.value(QStringLiteral("julianDayTt")).toDouble() -
+		         julianDayTt) <= 1e-12 &&
+		std::abs(moonState.value(QStringLiteral("julianDayUt")).toDouble() -
+		         julianDayUt) <= 1e-12 &&
+		std::abs(moonState.value(QStringLiteral("julianDayTt")).toDouble() -
+		         julianDayTt) <= 1e-12;
+	const auto bodyPositionValuesValid = [](const QVariantMap& state)
+	{
+		const double ra = state.value(
+			QStringLiteral("rightAscensionJ2000Degrees")).toDouble();
+		const double dec = state.value(
+			QStringLiteral("declinationJ2000Degrees")).toDouble();
+		const double az = state.value(
+			QStringLiteral("azimuthGeometricDegrees")).toDouble();
+		const double alt = state.value(
+			QStringLiteral("altitudeGeometricDegrees")).toDouble();
+		const double distance = state.value(
+			QStringLiteral("distanceAu")).toDouble();
+		const double diameter = state.value(
+			QStringLiteral("angularDiameterUnscaledDegrees")).toDouble();
+		return std::isfinite(ra) && ra >= 0.0 && ra < 360.0 &&
+			std::isfinite(dec) && dec >= -90.0 && dec <= 90.0 &&
+			std::isfinite(az) && az >= 0.0 && az < 360.0 &&
+			std::isfinite(alt) && alt >= -90.0 && alt <= 90.0 &&
+			std::isfinite(distance) && distance > 0.0 &&
+			std::isfinite(diameter) && diameter > 0.0;
+	};
+	const bool bodyPositionValuesMatch = bodyStateTypesMatch &&
+		bodyPositionValuesValid(sunState) &&
+		bodyPositionValuesValid(moonState);
+	const double moonIlluminatedFraction =
+		moonState.value(QStringLiteral("illuminatedFraction")).toDouble();
+	const double moonPhaseAngleDegrees =
+		moonState.value(QStringLiteral("phaseAngleDegrees")).toDouble();
+	const double moonElongationDegrees =
+		moonState.value(QStringLiteral("elongationDegrees")).toDouble();
+	const bool moonPhaseValuesValid = bodyStateTypesMatch &&
+		moonPhaseAvailable && std::isfinite(moonIlluminatedFraction) &&
+		moonIlluminatedFraction >= 0.0 && moonIlluminatedFraction <= 1.0 &&
+		std::isfinite(moonPhaseAngleDegrees) &&
+		moonPhaseAngleDegrees >= 0.0 && moonPhaseAngleDegrees <= 180.0 &&
+		std::isfinite(moonElongationDegrees) &&
+		moonElongationDegrees >= 0.0 && moonElongationDegrees <= 180.0;
+	constexpr double pi = 3.14159265358979323846;
+	const double expectedMoonIlluminatedFraction =
+		0.5 * (1.0 + std::cos(moonPhaseAngleDegrees * pi / 180.0));
+	const bool moonPhaseRelationValid = moonPhaseValuesValid &&
+		std::abs(moonIlluminatedFraction -
+		         expectedMoonIlluminatedFraction) <= 1e-5;
+
 	const bool success = versionMatches && appInitialized &&
 		selfRegistered && solarSystemAvailable &&
 		solarSystemIdentityMatches && nullCoreReturnsEmpty &&
+		nullBodyCoreReturnsEmpty && emptyBodyIdReturnsEmpty &&
+		unknownBodyReturnsEmpty && sunStateAvailable &&
+		moonStateAvailable && bodyStateSchemaMatches &&
+		bodyIdentitiesMatch && bodyStateTypesMatch &&
+		bodyLookupCaseInsensitive && bodyStateTimesMatch &&
+		bodyPositionValuesMatch && sunPhaseUnavailable &&
+		moonPhaseAvailable && moonPhaseValuesValid &&
+		moonPhaseRelationValid &&
 		coreStateAvailable && coreStateSchemaMatches &&
 		coreStateTypesMatch && astronomyValuesValid &&
 		ephemerisRelationValid && locationValuesValid;
@@ -138,6 +278,12 @@ void StellariumStateProbe::init()
 		{QStringLiteral("solar_system_identity_matches"),
 		 solarSystemIdentityMatches},
 		{QStringLiteral("null_core_returns_empty"), nullCoreReturnsEmpty},
+		{QStringLiteral("null_body_core_returns_empty"),
+		 nullBodyCoreReturnsEmpty},
+		{QStringLiteral("empty_body_id_returns_empty"),
+		 emptyBodyIdReturnsEmpty},
+		{QStringLiteral("unknown_body_returns_empty"),
+		 unknownBodyReturnsEmpty},
 		{QStringLiteral("core_state_available"), coreStateAvailable},
 		{QStringLiteral("core_state_schema_matches"),
 		 coreStateSchemaMatches},
@@ -146,6 +292,23 @@ void StellariumStateProbe::init()
 		{QStringLiteral("ephemeris_relation_valid"),
 		 ephemerisRelationValid},
 		{QStringLiteral("location_values_valid"), locationValuesValid},
+		{QStringLiteral("sun_state_available"), sunStateAvailable},
+		{QStringLiteral("moon_state_available"), moonStateAvailable},
+		{QStringLiteral("body_state_schema_matches"),
+		 bodyStateSchemaMatches},
+		{QStringLiteral("body_identities_match"), bodyIdentitiesMatch},
+		{QStringLiteral("body_state_types_match"), bodyStateTypesMatch},
+		{QStringLiteral("body_lookup_case_insensitive"),
+		 bodyLookupCaseInsensitive},
+		{QStringLiteral("body_state_times_match"), bodyStateTimesMatch},
+		{QStringLiteral("body_position_values_valid"),
+		 bodyPositionValuesMatch},
+		{QStringLiteral("sun_phase_unavailable"), sunPhaseUnavailable},
+		{QStringLiteral("moon_phase_available"), moonPhaseAvailable},
+		{QStringLiteral("moon_phase_values_valid"),
+		 moonPhaseValuesValid},
+		{QStringLiteral("moon_phase_relation_valid"),
+		 moonPhaseRelationValid},
 		{QStringLiteral("julian_day_ut"), julianDayUt},
 		{QStringLiteral("julian_day_tt"), julianDayTt},
 		{QStringLiteral("delta_t_seconds"), deltaTSeconds},
@@ -165,7 +328,56 @@ void StellariumStateProbe::init()
 		{QStringLiteral("altitude_meters"),
 		 coreState.value(QStringLiteral("altitudeMeters")).toInt()},
 		{QStringLiteral("planet_name"),
-		 coreState.value(QStringLiteral("planetName")).toString()}
+		 coreState.value(QStringLiteral("planetName")).toString()},
+		{QStringLiteral("sun_english_name"),
+		 sunState.value(QStringLiteral("englishName")).toString()},
+		{QStringLiteral("moon_english_name"),
+		 moonState.value(QStringLiteral("englishName")).toString()},
+		{QStringLiteral("aberration_enabled"),
+		 sunState.value(QStringLiteral("aberrationEnabled")).toBool()},
+		{QStringLiteral("topocentric_coordinates_enabled"),
+		 sunState.value(
+			 QStringLiteral("topocentricCoordinatesEnabled")).toBool()},
+		{QStringLiteral("sun_right_ascension_j2000_degrees"),
+		 sunState.value(
+			 QStringLiteral("rightAscensionJ2000Degrees")).toDouble()},
+		{QStringLiteral("sun_declination_j2000_degrees"),
+		 sunState.value(
+			 QStringLiteral("declinationJ2000Degrees")).toDouble()},
+		{QStringLiteral("sun_azimuth_geometric_degrees"),
+		 sunState.value(
+			 QStringLiteral("azimuthGeometricDegrees")).toDouble()},
+		{QStringLiteral("sun_altitude_geometric_degrees"),
+		 sunState.value(
+			 QStringLiteral("altitudeGeometricDegrees")).toDouble()},
+		{QStringLiteral("sun_distance_au"),
+		 sunState.value(QStringLiteral("distanceAu")).toDouble()},
+		{QStringLiteral("sun_angular_diameter_unscaled_degrees"),
+		 sunState.value(
+			 QStringLiteral("angularDiameterUnscaledDegrees")).toDouble()},
+		{QStringLiteral("moon_right_ascension_j2000_degrees"),
+		 moonState.value(
+			 QStringLiteral("rightAscensionJ2000Degrees")).toDouble()},
+		{QStringLiteral("moon_declination_j2000_degrees"),
+		 moonState.value(
+			 QStringLiteral("declinationJ2000Degrees")).toDouble()},
+		{QStringLiteral("moon_azimuth_geometric_degrees"),
+		 moonState.value(
+			 QStringLiteral("azimuthGeometricDegrees")).toDouble()},
+		{QStringLiteral("moon_altitude_geometric_degrees"),
+		 moonState.value(
+			 QStringLiteral("altitudeGeometricDegrees")).toDouble()},
+		{QStringLiteral("moon_distance_au"),
+		 moonState.value(QStringLiteral("distanceAu")).toDouble()},
+		{QStringLiteral("moon_angular_diameter_unscaled_degrees"),
+		 moonState.value(
+			 QStringLiteral("angularDiameterUnscaledDegrees")).toDouble()},
+		{QStringLiteral("moon_illuminated_fraction"),
+		 moonIlluminatedFraction},
+		{QStringLiteral("moon_phase_angle_degrees"),
+		 moonPhaseAngleDegrees},
+		{QStringLiteral("moon_elongation_degrees"),
+		 moonElongationDegrees}
 	};
 
 	const QString sentinelPath =

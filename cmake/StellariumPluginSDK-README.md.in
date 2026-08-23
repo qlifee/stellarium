@@ -15,12 +15,12 @@ them:
 
 This surface is sufficient to implement `StelModule` and `StelPluginInterface`,
 to use the tested `StelApp` initialization and module-lookup operations, and to
-copy the validated read-only core time/location snapshot. It remains
-insufficient for most full-featured plug-ins. Installing a dependency header
-does not make all of its declarations an independent public API. Untested
-declarations, other source-tree headers, and other symbols visible from
-`stelMain.dll` are not implicitly endorsed, even if the compiler or linker can
-see them.
+copy the validated read-only core time/location and current Solar System body
+snapshots. It remains insufficient for most full-featured plug-ins. Installing
+a dependency header does not make all of its declarations an independent
+public API. Untested declarations, other source-tree headers, and other symbols
+visible from `stelMain.dll` are not implicitly endorsed, even if the compiler
+or linker can see them.
 
 For `StelApp`, this proof specifically validates `isInitialized()`,
 `getInstance()`, `getModule()`, and `getCore()`. Although some of these are
@@ -30,7 +30,7 @@ therefore imports the validated functions from `stelMain.dll` instead of
 directly importing private data. This is still a private C++ class ABI supported
 only by this archive's exact-build contract and required compile definitions.
 `getCore()` is validated only for obtaining the opaque pointer accepted by the
-snapshot function below. Other inline accessors and forward-declared return
+snapshot functions below. Other inline accessors and forward-declared return
 types remain outside this proof's API surface.
 
 ## Read-only core state snapshot
@@ -70,6 +70,63 @@ object layouts and does not return internal pointers. `QVariantMap`, `QString`,
 and `QVariant` still cross the C++ DLL boundary, so this operation has the same
 exact Qt, MSVC toolset, build-configuration, and runtime requirements as the
 rest of this SDK. It is not a stable ABI across Qt or Stellarium releases.
+
+## Read-only Solar System body state snapshot
+
+`core/StelPluginAPI.hpp` also declares:
+
+```cpp
+QVariantMap StelPluginAPI::getSolarSystemBodyStateSnapshot(
+    const StelCore* core, const QString& bodyId);
+```
+
+The body ID currently accepts `Sun` or `Moon`, matched case-insensitively after
+trimming surrounding whitespace. For example, both `Moon` and `moon` are valid.
+This deliberately narrow first slice does not promise general planet or minor-
+body lookup. Call it only on Stellarium's main thread after the host has
+completed a core update. The core pointer has the same opaque borrowed-pointer
+contract as `getCoreStateSnapshot()`.
+
+The function returns an empty map for a null core, an unavailable Solar System,
+an empty or unknown body ID, or unavailable/non-finite base position data. A
+successful map always has these keys and value types:
+
+| Key | C++ value type | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | `int` | Body snapshot schema version; currently `1`. |
+| `englishName` | `QString` | Canonical English body name returned by Stellarium. |
+| `julianDayUt` | `double` | Current host Julian Day in UT. |
+| `julianDayTt` | `double` | Current host Julian Day in TT. |
+| `rightAscensionJ2000Degrees` | `double` | Observer-centred J2000 right ascension, normalized to [0, 360) degrees. |
+| `declinationJ2000Degrees` | `double` | Observer-centred J2000 declination in degrees. |
+| `azimuthGeometricDegrees` | `double` | Geometric compass azimuth in [0, 360) degrees; north is 0 and east is 90. |
+| `altitudeGeometricDegrees` | `double` | Geometric, airless altitude in degrees with refraction off. |
+| `distanceAu` | `double` | Current observer-to-body distance in AU. |
+| `angularDiameterUnscaledDegrees` | `double` | Natural apparent envelope diameter in degrees, ignoring artificial display scaling. |
+| `aberrationEnabled` | `bool` | Whether the host's aberration setting is enabled; an individual body algorithm may suppress a particular correction. |
+| `topocentricCoordinatesEnabled` | `bool` | Whether the observer position includes the configured topocentric offset. |
+| `phaseDataAvailable` | `bool` | Whether all three conditional phase fields below are present. |
+
+When `phaseDataAvailable` is true, the map also contains:
+
+| Key | C++ value type | Meaning |
+| --- | --- | --- |
+| `illuminatedFraction` | `double` | Illuminated disk fraction in [0, 1]. |
+| `phaseAngleDegrees` | `double` | Body phase angle in [0, 180] degrees. |
+| `elongationDegrees` | `double` | Unsigned angular separation from the Sun in [0, 180] degrees. |
+
+The three conditional keys are absent together for the Sun, whose upstream
+phase calculation is undefined, or for degenerate geometry. The azimuth
+convention is fixed by this API and does not follow the user's optional
+south-zero display preference.
+
+This is a snapshot of Stellarium's already-computed current simulation state.
+It neither changes time nor computes an arbitrary date. It exposes no
+`SolarSystem`, `Planet`, `StelObject`, or `StelCore` layout and returns no
+internal pointer. Those private headers are not part of the SDK. This stage
+also does not provide rise/set events, selection, navigation, or rendering.
+The returned `QVariantMap` and input `QString` retain the exact-build ABI
+requirements described above.
 
 The imported `Stellarium::stelMain` target supplies these definitions from the
 matching Stellarium build:

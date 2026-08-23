@@ -21,6 +21,10 @@ class StellariumStateProbe : public StelModule
 public:
 	StellariumStateProbe();
 	void init() override;
+	void update(double deltaTime) override;
+
+private:
+	bool probePending = false;
 };
 
 class StellariumStateProbeInterface : public QObject,
