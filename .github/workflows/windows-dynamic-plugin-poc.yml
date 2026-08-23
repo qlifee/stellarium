@@ -67,7 +67,7 @@ jobs:
       - name: Build
         run: |
           cmake --build $env:BUILD_DIR --config Release --parallel 4 `
-            --target stellarium testDates testStelFileMgr
+            --target fake-show-my-sky-client stellarium testDates testStelFileMgr
           if ($LASTEXITCODE -ne 0) {
             throw "Build failed with exit code $LASTEXITCODE"
           }
