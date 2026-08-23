@@ -55,6 +55,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DGENERATE_STELMAINLIB=ON `
             -DGENERATE_PACKAGE_TARGET=OFF `
+            -DENABLE_PCH=OFF `
             -DSTELLARIUM_RELEASE_BUILD=OFF `
             -DSCM_SHOULD_ENABLE_CONVERTER=OFF `
             -DENABLE_TESTING=ON `
