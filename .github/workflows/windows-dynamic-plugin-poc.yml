@@ -93,12 +93,36 @@ jobs:
           if (-not $sharedSetup.Success) {
             throw 'Could not locate the shared stelMain target setup'
           }
-          $msvcContract = '(?s)IF\s*\(\s*MSVC\s*\)' +
-            '(?:(?!ENDIF\s*\().)*' +
+          $definitionContract = '(?s)' +
             'TARGET_COMPILE_DEFINITIONS\s*\(\s*stelMain\s+' +
             'PRIVATE\s+STELMAIN_BUILD\s+' +
-            'INTERFACE\s+STELMAIN_USE_DLL\s*\)'
-          if ($sharedSetup.Groups['body'].Value -notmatch $msvcContract) {
+            'INTERFACE\s+\$\{STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS\}\s*\)'
+          if ($sharedSetup.Groups['body'].Value -notmatch `
+              $definitionContract) {
+            throw 'The stelMain import/export definition block is malformed'
+          }
+          $cmakeDepth = 0
+          $msvcDepth = 0
+          $definitionsInsideMsvc = $false
+          foreach ($line in ($sharedSetup.Groups['body'].Value -split '\r?\n')) {
+            if ($line -match '^\s*IF\s*\(') {
+              $cmakeDepth++
+              if ($line -match '^\s*IF\s*\(\s*MSVC\s*\)') {
+                $msvcDepth = $cmakeDepth
+              }
+            }
+            if ($msvcDepth -gt 0 -and
+                $line -match 'TARGET_COMPILE_DEFINITIONS\s*\(\s*stelMain') {
+              $definitionsInsideMsvc = $true
+            }
+            if ($line -match '^\s*ENDIF\s*\(') {
+              if ($msvcDepth -eq $cmakeDepth) {
+                $msvcDepth = 0
+              }
+              $cmakeDepth--
+            }
+          }
+          if (-not $definitionsInsideMsvc) {
             throw 'stelMain import/export definitions are not scoped to MSVC'
           }
 
@@ -243,19 +267,39 @@ jobs:
             throw "SDK archive has no expected top-level directory: $sdkRoot"
           }
 
+          $expectedApiHeaders = @(
+            'core/StelApp.hpp',
+            'core/StelModule.hpp',
+            'core/StelPluginInterface.hpp'
+          )
+          $expectedDependencyHeaders = @(
+            'StelMainExport.hpp',
+            'core/StelTextureTypes.hpp',
+            'core/StelUtils.hpp',
+            'core/VecMath.hpp'
+          )
+          $expectedHeaders = @(
+            'StelMainExport.hpp',
+            'core/StelApp.hpp',
+            'core/StelModule.hpp',
+            'core/StelPluginInterface.hpp',
+            'core/StelTextureTypes.hpp',
+            'core/StelUtils.hpp',
+            'core/VecMath.hpp'
+          )
           $expectedFiles = @(
             'COPYING',
             'MANIFEST.sha256',
             'README.md',
             'bin/stelMain.dll',
-            'include/stellarium/StelMainExport.hpp',
-            'include/stellarium/core/StelModule.hpp',
-            'include/stellarium/core/StelPluginInterface.hpp',
             'lib/cmake/Stellarium/StellariumConfig.cmake',
             'lib/cmake/Stellarium/StellariumConfigVersion.cmake',
             'lib/stelMain.lib',
             'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
-          ) | Sort-Object -CaseSensitive
+          ) + @($expectedHeaders | ForEach-Object {
+            "include/stellarium/$_"
+          })
+          $expectedFiles = @($expectedFiles | Sort-Object -CaseSensitive)
           $actualFiles = @(Get-ChildItem -LiteralPath $sdkRoot `
             -Recurse -File | ForEach-Object {
               [IO.Path]::GetRelativePath(
@@ -335,14 +379,41 @@ jobs:
               $buildInfo.msvc_runtime -ne 'MultiThreadedDLL') {
             throw "Unexpected packaged SDK metadata: $($buildInfo | ConvertTo-Json -Compress)"
           }
-          $expectedHeaders = @(
-            'StelMainExport.hpp',
-            'core/StelModule.hpp',
-            'core/StelPluginInterface.hpp'
+          $expectedDefinitions = @(
+            'ENABLE_SCRIPTING',
+            'ENABLE_SPOUT',
+            'NOMINMAX',
+            'STD_EXECUTION_KNOWN',
+            'STELMAIN_USE_DLL',
+            'WIN32_LEAN_AND_MEAN',
+            '_USE_MATH_DEFINES',
+            '_WIN32_WINNT=0x0A00'
           )
-          if ((@($buildInfo.supported_headers) -join "`n") -cne `
-              ($expectedHeaders -join "`n")) {
-            throw 'The packaged SDK describes an unexpected header surface'
+          $expectedQtComponents = @('Core', 'Gui')
+          if ((@($buildInfo.api_headers) -join "`n") -cne `
+              ($expectedApiHeaders -join "`n") -or
+              (@($buildInfo.dependency_headers) -join "`n") -cne `
+              ($expectedDependencyHeaders -join "`n")) {
+            throw 'The packaged SDK describes unexpected API header categories'
+          }
+          if ((@($buildInfo.installed_headers) -join "`n") -cne `
+                ($expectedHeaders -join "`n") -or
+              (@($buildInfo.supported_headers) -join "`n") -cne `
+                ($expectedHeaders -join "`n")) {
+            throw 'The packaged SDK describes an unexpected installed header surface'
+          }
+          $actualDefinitions = @($buildInfo.required_compile_definitions)
+          if ($actualDefinitions.Count -ne $expectedDefinitions.Count) {
+            throw 'The packaged SDK describes an unexpected definition count'
+          }
+          foreach ($definition in $expectedDefinitions) {
+            if ($actualDefinitions -cnotcontains $definition) {
+              throw "The packaged SDK omits compile definition $definition"
+            }
+          }
+          if ((@($buildInfo.required_qt_components) -join "`n") -cne `
+              ($expectedQtComponents -join "`n")) {
+            throw 'The packaged SDK describes unexpected Qt components'
           }
 
           $configPath = Join-Path $sdkRoot `
@@ -398,8 +469,12 @@ jobs:
             'bin/stelMain.dll',
             'lib/stelMain.lib',
             'include/stellarium/StelMainExport.hpp',
+            'include/stellarium/core/StelApp.hpp',
             'include/stellarium/core/StelModule.hpp',
             'include/stellarium/core/StelPluginInterface.hpp',
+            'include/stellarium/core/StelTextureTypes.hpp',
+            'include/stellarium/core/StelUtils.hpp',
+            'include/stellarium/core/VecMath.hpp',
             'lib/cmake/Stellarium/StellariumConfig.cmake',
             'lib/cmake/Stellarium/StellariumConfigVersion.cmake',
             'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
@@ -449,20 +524,29 @@ jobs:
           $config = Get-Content -LiteralPath $configPath -Raw
           foreach ($requiredText in @(
               'Stellarium::stelMain',
-              'find_dependency(Qt6 6.9.3 EXACT COMPONENTS Core Gui)')) {
+              'find_dependency(Qt6 6.9.3 EXACT COMPONENTS',
+              'Stellarium_PLUGIN_SDK_HEADERS',
+              'Stellarium_PLUGIN_SDK_REQUIRED_COMPILE_DEFINITIONS')) {
             if (-not $config.Contains($requiredText)) {
               throw "Installed CMake package is missing: $requiredText"
             }
           }
-          if ($config -notmatch `
-              'INTERFACE_COMPILE_DEFINITIONS\s+STELMAIN_USE_DLL') {
-            throw 'Installed CMake package does not import from stelMain.dll'
+          if ($config -notmatch 'INTERFACE_COMPILE_DEFINITIONS') {
+            throw 'Installed CMake package has no consumer definitions'
+          }
+          foreach ($definition in @(
+              'STELMAIN_USE_DLL',
+              'ENABLE_SCRIPTING',
+              'ENABLE_SPOUT',
+              '_USE_MATH_DEFINES',
+              '_WIN32_WINNT=0x0A00')) {
+            if (-not $config.Contains($definition)) {
+              throw "Installed CMake package omits $definition"
+            }
           }
 
           $packagedRoot = $env:STELLARIUM_SDK_ROOT
-          foreach ($relativePath in @(
-              'bin/stelMain.dll',
-              'lib/stelMain.lib')) {
+          foreach ($relativePath in $sdkFiles) {
             $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
               (Join-Path $installRoot $relativePath)).Hash
             $packagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
@@ -553,6 +637,16 @@ jobs:
               throw "No exported symbol containing $symbolOwner was found"
             }
           }
+          foreach ($apiSymbol in @(
+              'singleton@StelApp',
+              'getModule@StelApp')) {
+            if (-not (Select-String -LiteralPath $dllExports `
+                -SimpleMatch $apiSymbol) -or
+                -not (Select-String -LiteralPath $importMembers `
+                -SimpleMatch $apiSymbol)) {
+              throw "The DLL/import library omits $apiSymbol"
+            }
+          }
 
           Get-FileHash -Algorithm SHA256 -LiteralPath $exe, $dll, $importLibrary |
             Format-Table -AutoSize |
@@ -625,9 +719,10 @@ jobs:
           $sdkRoot = $env:STELLARIUM_SDK_ROOT
           $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
           $probeBin = Join-Path $env:PLUGIN_BUILD_DIR 'bin'
-          $plugin = Join-Path $probeBin 'libDynamicPluginProbe.dll'
-          $loader = Join-Path $probeBin 'DynamicPluginProbeLoader.exe'
-          foreach ($path in @($plugin, $loader)) {
+          $dynamicPlugin = Join-Path $probeBin 'libDynamicPluginProbe.dll'
+          $statePlugin = Join-Path $probeBin 'libStellariumStateProbe.dll'
+          $loader = Join-Path $probeBin 'StellariumPluginProbeLoader.exe'
+          foreach ($path in @($dynamicPlugin, $statePlugin, $loader)) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
               throw "External proof artifact is missing: $path"
             }
@@ -662,33 +757,6 @@ jobs:
             }
           }
 
-          $dependencies = Join-Path $diagnostics `
-            'DynamicPluginProbe-dependencies.txt'
-          $imports = Join-Path $diagnostics 'DynamicPluginProbe-imports.txt'
-          $headers = Join-Path $diagnostics 'DynamicPluginProbe-headers.txt'
-          $exports = Join-Path $diagnostics 'DynamicPluginProbe-exports.txt'
-          Invoke-Dumpbin $dependencies @('/DEPENDENTS', $plugin)
-          Invoke-Dumpbin $imports @('/IMPORTS', $plugin)
-          Invoke-Dumpbin $headers @('/HEADERS', $plugin)
-          Invoke-Dumpbin $exports @('/EXPORTS', $plugin)
-
-          if (-not (Select-String -LiteralPath $dependencies `
-              -Pattern 'stelMain\.dll')) {
-            throw 'The external plug-in does not depend on stelMain.dll'
-          }
-          if (-not (Select-String -LiteralPath $imports `
-              -Pattern 'StelModule')) {
-            throw 'The external plug-in has no imported StelModule symbol'
-          }
-          if (-not (Select-String -LiteralPath $headers `
-              -Pattern 'machine \(x64\)')) {
-            throw 'The external plug-in is not an x64 image'
-          }
-          if (-not (Select-String -LiteralPath $exports `
-              -Pattern 'qt_plugin')) {
-            throw 'The DLL does not export Qt plug-in entry points'
-          }
-
           $spoutDir = Join-Path $env:GITHUB_WORKSPACE 'util/spout2/x64'
           if (Test-Path -LiteralPath `
               (Join-Path $probeBin 'stelMain.dll') -PathType Leaf) {
@@ -696,35 +764,99 @@ jobs:
           }
           $sdkBin = Join-Path $sdkRoot 'bin'
           $env:PATH = "$sdkBin;$env:QT_ROOT_DIR\bin;$spoutDir;$env:PATH"
-          $loaderOutputPath = Join-Path $diagnostics `
-            'DynamicPluginProbe-loader.txt'
-          $loaderOutput = & $loader $plugin 2>&1
-          $loaderExitCode = $LASTEXITCODE
-          $loaderText = $loaderOutput | Out-String
-          [System.IO.File]::WriteAllText(
-            $loaderOutputPath,
-            [string] $loaderText)
-          $loaderText | Write-Host
-          if ($loaderExitCode -ne 0) {
-            throw "External plug-in loader failed with exit code $loaderExitCode"
-          }
-          foreach ($marker in @(
-              'STEL_DYNAMIC_PLUGIN_PROBE_INITIALIZED',
-              'STEL_DYNAMIC_PLUGIN_LOADER_OK')) {
+          $probes = @(
+            [pscustomobject]@{
+              Id = 'DynamicPluginProbe'
+              Path = $dynamicPlugin
+              Initialize = $true
+            },
+            [pscustomobject]@{
+              Id = 'StellariumStateProbe'
+              Path = $statePlugin
+              Initialize = $false
+            }
+          )
+          foreach ($probe in $probes) {
+            $dependencies = Join-Path $diagnostics `
+              "$($probe.Id)-dependencies.txt"
+            $imports = Join-Path $diagnostics "$($probe.Id)-imports.txt"
+            $headers = Join-Path $diagnostics "$($probe.Id)-headers.txt"
+            $exports = Join-Path $diagnostics "$($probe.Id)-exports.txt"
+            Invoke-Dumpbin $dependencies @('/DEPENDENTS', $probe.Path)
+            Invoke-Dumpbin $imports @('/IMPORTS', $probe.Path)
+            Invoke-Dumpbin $headers @('/HEADERS', $probe.Path)
+            Invoke-Dumpbin $exports @('/EXPORTS', $probe.Path)
+
+            if (-not (Select-String -LiteralPath $dependencies `
+                -Pattern 'stelMain\.dll')) {
+              throw "$($probe.Id) does not depend on stelMain.dll"
+            }
+            if (-not (Select-String -LiteralPath $imports `
+                -Pattern 'StelModule')) {
+              throw "$($probe.Id) has no imported StelModule symbol"
+            }
+            if (-not (Select-String -LiteralPath $headers `
+                -Pattern 'machine \(x64\)')) {
+              throw "$($probe.Id) is not an x64 image"
+            }
+            if (-not (Select-String -LiteralPath $exports `
+                -Pattern 'qt_plugin')) {
+              throw "$($probe.Id) does not export Qt plug-in entry points"
+            }
+            if ($probe.Id -eq 'StellariumStateProbe') {
+              foreach ($apiSymbol in @(
+                  'singleton@StelApp',
+                  'getModule@StelApp')) {
+                if (-not (Select-String -LiteralPath $imports `
+                    -SimpleMatch $apiSymbol)) {
+                  throw "StellariumStateProbe does not import $apiSymbol"
+                }
+              }
+            }
+
+            $loaderArguments = @($probe.Path, $probe.Id)
+            if ($probe.Initialize) {
+              $loaderArguments += '--initialize'
+            }
+            $loaderOutputPath = Join-Path $diagnostics `
+              "$($probe.Id)-loader.txt"
+            $loaderOutput = & $loader @loaderArguments 2>&1
+            $loaderExitCode = $LASTEXITCODE
+            $loaderText = $loaderOutput | Out-String
+            [System.IO.File]::WriteAllText(
+              $loaderOutputPath,
+              [string] $loaderText)
+            $loaderText | Write-Host
+            if ($loaderExitCode -ne 0) {
+              throw "$($probe.Id) loader failed with exit code $loaderExitCode"
+            }
+            $metadataMarker = 'STEL_PLUGIN_METADATA_OK {0} 26.2.0' -f `
+              $probe.Id
             if (-not (Select-String -LiteralPath $loaderOutputPath `
-                -SimpleMatch $marker)) {
-              throw "External plug-in loader did not report $marker"
+                -SimpleMatch $metadataMarker)) {
+              throw "$($probe.Id) loader did not report $metadataMarker"
+            }
+            if ($probe.Initialize -and
+                -not (Select-String -LiteralPath $loaderOutputPath `
+                -SimpleMatch 'STEL_DYNAMIC_PLUGIN_PROBE_INITIALIZED')) {
+              throw 'DynamicPluginProbe did not initialize in the loader'
+            }
+            if (-not $probe.Initialize -and
+                (Select-String -LiteralPath $loaderOutputPath `
+                  -Pattern 'STEL_STATE_PROBE_(OK|FAILED)')) {
+              throw 'The metadata-only loader unexpectedly initialized StellariumStateProbe'
             }
           }
 
-          Get-FileHash -Algorithm SHA256 -LiteralPath $plugin, $loader |
+          Get-FileHash -Algorithm SHA256 -LiteralPath `
+            $dynamicPlugin, $statePlugin, $loader |
             Format-Table -AutoSize |
             Out-String |
             Set-Content -LiteralPath `
               (Join-Path $diagnostics 'plugin-proof-sha256.txt') `
               -Encoding utf8
 
-          "Verified: libDynamicPluginProbe.dll imports stelMain.dll and loads through Qt's plug-in interface." |
+          "Verified: both external plug-ins import stelMain.dll and load through Qt's plug-in interface; StellariumStateProbe imports the tested StelApp symbols." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Run DLL-linked smoke test
@@ -748,7 +880,7 @@ jobs:
             'stellarium-plugin-runtime'
           $userDir = Join-Path $env:RUNNER_TEMP 'stellarium-plugin-user'
           $pluginDir = Join-Path $userDir `
-            'modules/DynamicPluginProbe'
+            'modules/StellariumStateProbe'
           New-Item -ItemType Directory -Force -Path `
             $runtimeRoot, $pluginDir | Out-Null
 
@@ -768,16 +900,16 @@ jobs:
             -Destination $runtimeRoot -Force
 
           $plugin = Join-Path $env:PLUGIN_BUILD_DIR `
-            'bin/libDynamicPluginProbe.dll'
+            'bin/libStellariumStateProbe.dll'
           Copy-Item -LiteralPath $plugin -Destination $pluginDir -Force
 
           $app = Join-Path $runtimeRoot 'stellarium.exe'
           $log = Join-Path $userDir 'plugin-integration.log'
-          $sentinel = Join-Path $userDir 'plugin-initialized.txt'
+          $sentinel = Join-Path $userDir 'state-probe.json'
           $standardOutput = Join-Path $userDir 'stellarium-stdout.txt'
           $standardError = Join-Path $userDir 'stellarium-stderr.txt'
           $env:STELLARIUM_DATA_ROOT = $runtimeRoot
-          $env:STELLARIUM_PLUGIN_PROBE_SENTINEL = $sentinel
+          $env:STELLARIUM_STATE_PROBE_SENTINEL = $sentinel
           $env:QT_DEBUG_PLUGINS = '1'
           $env:QT_PLUGIN_PATH = $runtimeRoot
           $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path `
@@ -821,7 +953,7 @@ jobs:
 
           foreach ($result in @(
               @{ Source = $log; Name = 'stellarium-plugin-integration.log' },
-              @{ Source = $sentinel; Name = 'plugin-initialized.txt' },
+              @{ Source = $sentinel; Name = 'state-probe.json' },
               @{
                 Source = $standardOutput
                 Name = 'stellarium-plugin-stdout.txt'
@@ -848,29 +980,43 @@ jobs:
             throw "Stellarium exited with code $($process.ExitCode)"
           }
           if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) {
-            throw 'Stellarium did not initialize DynamicPluginProbe'
+            throw 'Stellarium did not initialize StellariumStateProbe'
           }
-          $sentinelText = Get-Content -LiteralPath $sentinel -Raw
-          if (-not $sentinelText.Contains('DynamicPluginProbe 26.2.0')) {
-            throw "Unexpected plug-in sentinel: $sentinelText"
+          $state = Get-Content -LiteralPath $sentinel -Raw |
+            ConvertFrom-Json
+          if ($state.schema_version -ne 1 -or
+              $state.probe_id -ne 'StellariumStateProbe' -or
+              $state.status -ne 'ok' -or
+              $state.stellarium_version -ne '26.2.0' -or
+              $state.expected_stellarium_version -ne '26.2.0' -or
+              $state.version_matches -ne $true -or
+              $state.app_initialized -ne $true -or
+              $state.self_registered -ne $true -or
+              $state.solar_system_available -ne $true -or
+              $state.solar_system_identity_matches -ne $true) {
+            throw "Unexpected state probe result: $($state | ConvertTo-Json -Compress)"
           }
           if (-not (Test-Path -LiteralPath $log -PathType Leaf)) {
             throw 'Stellarium did not create the integration log'
           }
           if (-not (Select-String -LiteralPath $log `
-              -Pattern 'Loaded plugin.*DynamicPluginProbe')) {
-            throw 'Stellarium did not report loading DynamicPluginProbe'
+              -Pattern 'Loaded plugin.*StellariumStateProbe')) {
+            throw 'Stellarium did not report loading StellariumStateProbe'
           }
           if (-not (Select-String -LiteralPath $log `
-              -SimpleMatch 'STEL_DYNAMIC_PLUGIN_PROBE_INITIALIZED')) {
-            throw 'Stellarium did not report the plug-in initialization marker'
+              -SimpleMatch 'STEL_STATE_PROBE_OK')) {
+            throw 'Stellarium did not report the state API success marker'
+          }
+          if (Select-String -LiteralPath $log `
+              -SimpleMatch 'STEL_STATE_PROBE_FAILED') {
+            throw 'StellariumStateProbe reported a failed live API check'
           }
           if (Select-String -LiteralPath $log `
               -SimpleMatch "Couldn't load the dynamic library") {
             throw 'Stellarium reported a dynamic-library load failure'
           }
 
-          "Verified: Stellarium discovered modules/DynamicPluginProbe/libDynamicPluginProbe.dll, initialized it, and exited cleanly." |
+          "Verified: Stellarium discovered StellariumStateProbe, and the external plug-in read live application/module state through the packaged StelApp API before exiting cleanly." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Collect build metadata
@@ -887,7 +1033,7 @@ jobs:
           if (Test-Path -LiteralPath $externalCache) {
             Copy-Item -LiteralPath $externalCache `
               -Destination (Join-Path $diagnostics `
-                'DynamicPluginProbe-CMakeCache.txt') -Force
+                'StellariumPluginProbe-CMakeCache.txt') -Force
           }
 
           Get-ChildItem -Path $env:BUILD_DIR -Recurse -File `

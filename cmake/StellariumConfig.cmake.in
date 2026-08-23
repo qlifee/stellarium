@@ -11,6 +11,16 @@ set(Stellarium_PLUGIN_ABI_MSVC_TOOLSET_VERSION "@MSVC_TOOLSET_VERSION@")
 set(Stellarium_PLUGIN_ABI_MSVC_RUNTIME "@STELLARIUM_PLUGIN_ABI_MSVC_RUNTIME@")
 set(Stellarium_PLUGIN_ABI_QT_VERSION "@QT_VERSION@")
 set(Stellarium_PLUGIN_INTERFACE_IID "org.stellarium.StelPluginInterface/2.0")
+set(Stellarium_PLUGIN_SDK_API_HEADERS
+	"@STELLARIUM_PLUGIN_SDK_API_HEADERS@")
+set(Stellarium_PLUGIN_SDK_DEPENDENCY_HEADERS
+	"@STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS@")
+set(Stellarium_PLUGIN_SDK_HEADERS
+@STELLARIUM_PLUGIN_SDK_HEADERS_CMAKE@)
+set(Stellarium_PLUGIN_SDK_REQUIRED_COMPILE_DEFINITIONS
+@STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_CMAKE@)
+set(Stellarium_PLUGIN_SDK_REQUIRED_QT_COMPONENTS
+	"@STELLARIUM_PLUGIN_SDK_QT_COMPONENTS@")
 
 if(NOT WIN32)
 	message(FATAL_ERROR
@@ -96,7 +106,8 @@ unset(_stellarium_generator_platform)
 unset(_stellarium_system_processor)
 
 set(_stellarium_package_prefix_dir "${PACKAGE_PREFIX_DIR}")
-find_dependency(Qt6 @QT_VERSION@ EXACT COMPONENTS Core Gui)
+find_dependency(Qt6 @QT_VERSION@ EXACT COMPONENTS
+	${Stellarium_PLUGIN_SDK_REQUIRED_QT_COMPONENTS})
 # Dependency packages generated for CMake before 3.30 may overwrite this
 # package's prefix. Restore it before expanding Stellarium's relocatable paths.
 set(PACKAGE_PREFIX_DIR "${_stellarium_package_prefix_dir}")
@@ -114,17 +125,26 @@ set_and_check(Stellarium_PLUGIN_BUILD_INFO
 	"@PACKAGE_STELLARIUM_PLUGIN_SDK_DATADIR@/StellariumPluginBuildInfo.json")
 
 if(NOT TARGET Stellarium::stelMain)
+	set(_stellarium_plugin_qt_targets)
+	foreach(_stellarium_qt_component IN LISTS
+			Stellarium_PLUGIN_SDK_REQUIRED_QT_COMPONENTS)
+		list(APPEND _stellarium_plugin_qt_targets
+			"Qt6::${_stellarium_qt_component}")
+	endforeach()
 	add_library(Stellarium::stelMain SHARED IMPORTED)
 	set_target_properties(Stellarium::stelMain PROPERTIES
 		IMPORTED_CONFIGURATIONS RELEASE
 		IMPORTED_IMPLIB_RELEASE "${Stellarium_STELMAIN_LIBRARY}"
 		IMPORTED_LOCATION_RELEASE "${Stellarium_STELMAIN_RUNTIME}"
-		INTERFACE_COMPILE_DEFINITIONS STELMAIN_USE_DLL
+		INTERFACE_COMPILE_DEFINITIONS
+			"${Stellarium_PLUGIN_SDK_REQUIRED_COMPILE_DEFINITIONS}"
 		INTERFACE_COMPILE_FEATURES cxx_std_17
 		INTERFACE_COMPILE_OPTIONS "/utf-8;/Zc:__cplusplus;/permissive-"
 		INTERFACE_INCLUDE_DIRECTORIES
 			"${Stellarium_INCLUDE_DIR};${Stellarium_CORE_INCLUDE_DIR}"
-		INTERFACE_LINK_LIBRARIES "Qt6::Core;Qt6::Gui")
+		INTERFACE_LINK_LIBRARIES "${_stellarium_plugin_qt_targets}")
+	unset(_stellarium_plugin_qt_targets)
+	unset(_stellarium_qt_component)
 endif()
 
 check_required_components(Stellarium)

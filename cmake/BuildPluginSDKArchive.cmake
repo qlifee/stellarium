@@ -69,6 +69,33 @@ IF(NOT IS_DIRECTORY "${_source_dir}")
      MESSAGE(FATAL_ERROR
           "PLUGIN_SDK_SOURCE_DIR is not a directory: ${_source_dir}")
 ENDIF()
+SET(_header_manifest
+     "${_source_dir}/cmake/StellariumPluginSDKHeaders.cmake")
+IF(NOT EXISTS "${_header_manifest}" OR
+     IS_DIRECTORY "${_header_manifest}")
+     MESSAGE(FATAL_ERROR
+          "The plug-in SDK header manifest is not a file: ${_header_manifest}")
+ENDIF()
+
+INCLUDE("${_header_manifest}")
+IF(NOT STELLARIUM_PLUGIN_SDK_HEADERS)
+     MESSAGE(FATAL_ERROR "The plug-in SDK header manifest is empty")
+ENDIF()
+SET(_seen_headers "")
+FOREACH(_header IN LISTS STELLARIUM_PLUGIN_SDK_HEADERS)
+     IF(IS_ABSOLUTE "${_header}" OR
+          _header MATCHES "(^|/)\\.\\.(/|$)" OR
+          _header MATCHES "\\\\" OR
+          NOT _header MATCHES "^[A-Za-z0-9_./+-]+\\.hpp$")
+          MESSAGE(FATAL_ERROR
+               "Invalid plug-in SDK header path: ${_header}")
+     ENDIF()
+     IF(_header IN_LIST _seen_headers)
+          MESSAGE(FATAL_ERROR "Duplicate plug-in SDK header: ${_header}")
+     ENDIF()
+     LIST(APPEND _seen_headers "${_header}")
+ENDFOREACH()
+UNSET(_seen_headers)
 
 SET(_build_prefix "${_build_dir}/")
 STRING(FIND "${_stage_parent}/" "${_build_prefix}" _stage_prefix)
@@ -148,13 +175,14 @@ SET(_payload_files
      "COPYING"
      "README.md"
      "bin/stelMain.dll"
-     "include/stellarium/StelMainExport.hpp"
-     "include/stellarium/core/StelModule.hpp"
-     "include/stellarium/core/StelPluginInterface.hpp"
      "lib/cmake/Stellarium/StellariumConfig.cmake"
      "lib/cmake/Stellarium/StellariumConfigVersion.cmake"
      "lib/stelMain.lib"
      "share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json")
+FOREACH(_header IN LISTS STELLARIUM_PLUGIN_SDK_HEADERS)
+     LIST(APPEND _payload_files "include/stellarium/${_header}")
+ENDFOREACH()
+LIST(SORT _payload_files)
 
 FILE(REMOVE_RECURSE "${_sdk_root}")
 FILE(REMOVE "${_sdk_archive}" "${_sdk_archive_checksum}")

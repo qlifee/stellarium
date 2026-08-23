@@ -594,9 +594,28 @@ IF(GENERATE_STELMAINLIB)
      IF(MSVC)
           # MinGW relies on its historical automatic export behavior. These
           # explicit import/export definitions are only for the MSVC DLL split.
+          SET(STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS
+               NOMINMAX
+               STELMAIN_USE_DLL
+               WIN32_LEAN_AND_MEAN
+               _USE_MATH_DEFINES
+               "_WIN32_WINNT=${MIN_WIN_VERSION}")
+          IF(ENABLE_SCRIPTING)
+               LIST(APPEND STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS
+                    ENABLE_SCRIPTING)
+          ENDIF()
+          IF(ENABLE_SPOUT)
+               LIST(APPEND STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS
+                    ENABLE_SPOUT)
+          ENDIF()
+          IF(STD_EXECUTION_KNOWN)
+               LIST(APPEND STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS
+                    STD_EXECUTION_KNOWN)
+          ENDIF()
+          LIST(SORT STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS)
           TARGET_COMPILE_DEFINITIONS(stelMain
                PRIVATE STELMAIN_BUILD
-               INTERFACE STELMAIN_USE_DLL)
+               INTERFACE ${STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS})
           # Initial proof of concept for linking third-party plug-ins. A
           # dedicated public API export macro may replace this broad export.
           # CMake's automatic export scan mistakes an MSVC PCH bookkeeping
@@ -633,6 +652,29 @@ IF(GENERATE_STELMAINLIB)
           # which are intentionally not part of this SDK.
           INCLUDE(GNUInstallDirs)
           INCLUDE(CMakePackageConfigHelpers)
+          INCLUDE("${PROJECT_SOURCE_DIR}/cmake/StellariumPluginSDKHeaders.cmake")
+
+          SET(_plugin_sdk_seen_headers "")
+          FOREACH(_plugin_sdk_header IN LISTS STELLARIUM_PLUGIN_SDK_HEADERS)
+               IF(IS_ABSOLUTE "${_plugin_sdk_header}" OR
+                    _plugin_sdk_header MATCHES "(^|/)\\.\\.(/|$)" OR
+                    _plugin_sdk_header MATCHES "\\\\" OR
+                    NOT _plugin_sdk_header MATCHES "^[A-Za-z0-9_./+-]+\\.hpp$")
+                    MESSAGE(FATAL_ERROR
+                         "Invalid plug-in SDK header path: ${_plugin_sdk_header}")
+               ENDIF()
+               IF(_plugin_sdk_header IN_LIST _plugin_sdk_seen_headers)
+                    MESSAGE(FATAL_ERROR
+                         "Duplicate plug-in SDK header: ${_plugin_sdk_header}")
+               ENDIF()
+               IF(NOT EXISTS
+                    "${PROJECT_SOURCE_DIR}/src/${_plugin_sdk_header}")
+                    MESSAGE(FATAL_ERROR
+                         "Plug-in SDK header does not exist: ${_plugin_sdk_header}")
+               ENDIF()
+               LIST(APPEND _plugin_sdk_seen_headers "${_plugin_sdk_header}")
+          ENDFOREACH()
+          UNSET(_plugin_sdk_seen_headers)
 
           IF(STELLARIUM_BUILD_ARM64)
                SET(STELLARIUM_PLUGIN_ABI_ARCHITECTURE "arm64")
@@ -817,6 +859,81 @@ IF(GENERATE_STELMAINLIB)
                SET(STELLARIUM_PLUGIN_SDK_BUILD_CONFIGURATION_ARGUMENT "")
           ENDIF()
 
+          SET(STELLARIUM_PLUGIN_SDK_API_HEADERS_JSON "")
+          SET(STELLARIUM_PLUGIN_SDK_API_HEADERS_MARKDOWN "")
+          FOREACH(_plugin_sdk_header IN LISTS
+               STELLARIUM_PLUGIN_SDK_API_HEADERS)
+               IF(STELLARIUM_PLUGIN_SDK_API_HEADERS_JSON)
+                    STRING(APPEND STELLARIUM_PLUGIN_SDK_API_HEADERS_JSON
+                         ",\n")
+               ENDIF()
+               STRING(APPEND STELLARIUM_PLUGIN_SDK_API_HEADERS_JSON
+                    "    \"${_plugin_sdk_header}\"")
+               STRING(APPEND STELLARIUM_PLUGIN_SDK_API_HEADERS_MARKDOWN
+                    "- `${_plugin_sdk_header}`\n")
+          ENDFOREACH()
+
+          SET(STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_JSON "")
+          SET(STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_MARKDOWN "")
+          FOREACH(_plugin_sdk_header IN LISTS
+               STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS)
+               IF(STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_JSON)
+                    STRING(APPEND
+                         STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_JSON
+                         ",\n")
+               ENDIF()
+               STRING(APPEND
+                    STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_JSON
+                    "    \"${_plugin_sdk_header}\"")
+               STRING(APPEND
+                    STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_MARKDOWN
+                    "- `${_plugin_sdk_header}`\n")
+          ENDFOREACH()
+
+          SET(STELLARIUM_PLUGIN_SDK_HEADERS_JSON "")
+          SET(STELLARIUM_PLUGIN_SDK_HEADERS_CMAKE "")
+          FOREACH(_plugin_sdk_header IN LISTS STELLARIUM_PLUGIN_SDK_HEADERS)
+               IF(STELLARIUM_PLUGIN_SDK_HEADERS_JSON)
+                    STRING(APPEND STELLARIUM_PLUGIN_SDK_HEADERS_JSON ",\n")
+               ENDIF()
+               STRING(APPEND STELLARIUM_PLUGIN_SDK_HEADERS_JSON
+                    "    \"${_plugin_sdk_header}\"")
+               STRING(APPEND STELLARIUM_PLUGIN_SDK_HEADERS_CMAKE
+                    "\n\t\"${_plugin_sdk_header}\"")
+          ENDFOREACH()
+
+          SET(STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_JSON "")
+          SET(STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_CMAKE "")
+          SET(STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_MARKDOWN "")
+          FOREACH(_plugin_sdk_definition IN LISTS
+               STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS)
+               IF(STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_JSON)
+                    STRING(APPEND
+                         STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_JSON
+                         ",\n")
+               ENDIF()
+               STRING(APPEND
+                    STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_JSON
+                    "    \"${_plugin_sdk_definition}\"")
+               STRING(APPEND
+                    STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_CMAKE
+                    "\n\t\"${_plugin_sdk_definition}\"")
+               STRING(APPEND
+                    STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_MARKDOWN
+                    "- `${_plugin_sdk_definition}`\n")
+          ENDFOREACH()
+
+          SET(STELLARIUM_PLUGIN_SDK_QT_COMPONENTS_JSON "")
+          FOREACH(_plugin_sdk_qt_component IN LISTS
+               STELLARIUM_PLUGIN_SDK_QT_COMPONENTS)
+               IF(STELLARIUM_PLUGIN_SDK_QT_COMPONENTS_JSON)
+                    STRING(APPEND STELLARIUM_PLUGIN_SDK_QT_COMPONENTS_JSON
+                         ",\n")
+               ENDIF()
+               STRING(APPEND STELLARIUM_PLUGIN_SDK_QT_COMPONENTS_JSON
+                    "    \"${_plugin_sdk_qt_component}\"")
+          ENDFOREACH()
+
           CONFIGURE_PACKAGE_CONFIG_FILE(
                "${PROJECT_SOURCE_DIR}/cmake/StellariumConfig.cmake.in"
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfig.cmake"
@@ -839,17 +956,24 @@ IF(GENERATE_STELMAINLIB)
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumPluginSDK-README.md"
                @ONLY)
 
-          INSTALL(FILES
-               "${PROJECT_SOURCE_DIR}/src/StelMainExport.hpp"
-               DESTINATION "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}"
-               CONFIGURATIONS Release
-               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
-          INSTALL(FILES
-               "${PROJECT_SOURCE_DIR}/src/core/StelModule.hpp"
-               "${PROJECT_SOURCE_DIR}/src/core/StelPluginInterface.hpp"
-               DESTINATION "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}/core"
-               CONFIGURATIONS Release
-               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
+          FOREACH(_plugin_sdk_header IN LISTS STELLARIUM_PLUGIN_SDK_HEADERS)
+               GET_FILENAME_COMPONENT(_plugin_sdk_header_directory
+                    "${_plugin_sdk_header}" DIRECTORY)
+               IF(_plugin_sdk_header_directory)
+                    SET(_plugin_sdk_header_destination
+                         "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}/${_plugin_sdk_header_directory}")
+               ELSE()
+                    SET(_plugin_sdk_header_destination
+                         "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}")
+               ENDIF()
+               INSTALL(FILES
+                    "${PROJECT_SOURCE_DIR}/src/${_plugin_sdk_header}"
+                    DESTINATION "${_plugin_sdk_header_destination}"
+                    CONFIGURATIONS Release
+                    COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
+          ENDFOREACH()
+          UNSET(_plugin_sdk_header_destination)
+          UNSET(_plugin_sdk_header_directory)
           INSTALL(FILES
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfig.cmake"
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfigVersion.cmake"

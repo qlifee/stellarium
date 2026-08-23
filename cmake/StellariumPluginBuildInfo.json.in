@@ -16,10 +16,37 @@
   "build_configuration": "@STELLARIUM_PLUGIN_ABI_CONFIGURATION@",
   "msvc_runtime": "@STELLARIUM_PLUGIN_ABI_MSVC_RUNTIME@",
   "compatibility_policy": "Plug-ins must match this exact Stellarium release and package build identity, architecture, compiler family and toolset, Qt build, build configuration, and MSVC runtime. Compatibility with other Stellarium releases or separately rebuilt packages is not guaranteed.",
-  "api_scope": "Only declarations in the installed supported_headers constitute this proof SDK's public plug-in API. Other exported stelMain symbols are not implicitly supported.",
+  "api_scope": "api_headers are the supported entry headers. dependency_headers are installed only to satisfy their includes. supported_headers is retained as a compatibility alias for installed_headers. This proof validates only validated_operations; other declarations and exported stelMain symbols are not implicitly endorsed.",
+  "abi_notes": "The validated inline StelApp::isInitialized() and getInstance() operations depend on matching private data and class layout. Use only this exact SDK/package pair and consume all required compile definitions through Stellarium::stelMain.",
+  "validated_capabilities": [
+    "plugin-interface metadata",
+    "module construction and initialization",
+    "application initialization check",
+    "application module lookup"
+  ],
+  "validated_operations": [
+    "StelModule construction and getModuleVersion()",
+    "StelPluginInterface metadata and module creation",
+    "StelApp::isInitialized()",
+    "StelApp::getInstance()",
+    "StelApp::getModule()"
+  ],
+  "required_qt_components": [
+@STELLARIUM_PLUGIN_SDK_QT_COMPONENTS_JSON@
+  ],
+  "required_compile_definitions": [
+@STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_JSON@
+  ],
+  "api_headers": [
+@STELLARIUM_PLUGIN_SDK_API_HEADERS_JSON@
+  ],
+  "dependency_headers": [
+@STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_JSON@
+  ],
+  "installed_headers": [
+@STELLARIUM_PLUGIN_SDK_HEADERS_JSON@
+  ],
   "supported_headers": [
-    "StelMainExport.hpp",
-    "core/StelModule.hpp",
-    "core/StelPluginInterface.hpp"
+@STELLARIUM_PLUGIN_SDK_HEADERS_JSON@
   ]
 }

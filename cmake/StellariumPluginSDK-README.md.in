@@ -4,16 +4,38 @@ This is a minimal proof SDK for building standalone C++ dynamic plug-ins for
 the matching Stellarium Windows package build. It is experimental, incomplete,
 and does not define a stable Stellarium SDK.
 
-Only these headers are supported by this archive:
+The supported API entry headers are:
 
-- `StelMainExport.hpp`
-- `core/StelModule.hpp`
-- `core/StelPluginInterface.hpp`
+@STELLARIUM_PLUGIN_SDK_API_HEADERS_MARKDOWN@
 
-They are sufficient to implement a minimal `StelModule` and
-`StelPluginInterface`. They are not sufficient for most full-featured plug-ins.
-Other source-tree headers and other symbols visible from `stelMain.dll` are
-implementation details, even if the linker can see them.
+These additional headers are installed only because the entry headers include
+them:
+
+@STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_MARKDOWN@
+
+This surface is sufficient to implement `StelModule` and `StelPluginInterface`
+and to use the tested `StelApp` initialization and module-lookup operations. It
+remains insufficient for most full-featured plug-ins. Installing
+a dependency header does not make all of its declarations an independent
+public API. Untested declarations, other source-tree headers, and other symbols
+visible from `stelMain.dll` are not implicitly endorsed, even if the compiler
+or linker can see them.
+
+For `StelApp`, this proof specifically validates `isInitialized()`,
+`getInstance()`, and `getModule()`. The first two are inline and depend on the
+matching private singleton data and class layout, so they are supported only by
+this archive's exact-build contract and required compile definitions. Other
+inline accessors may have similar dependencies, and forward-declared return
+types require future SDK headers before they can be used. Treat them as outside
+this proof's API surface.
+
+The imported `Stellarium::stelMain` target supplies these definitions from the
+matching Stellarium build:
+
+@STELLARIUM_PLUGIN_SDK_COMPILE_DEFINITIONS_MARKDOWN@
+
+Some definitions change the declared `StelApp` layout. Consume them through
+the imported target; do not copy, remove, or manually redefine them.
 
 ## Exact compatibility requirement
 
