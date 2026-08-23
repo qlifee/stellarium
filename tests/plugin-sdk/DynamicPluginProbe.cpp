@@ -48,12 +48,17 @@ void DynamicPluginProbe::init()
 		}
 
 		// Plug-ins initialize before Stellarium enters its top-level event
-		// loop. A short delay avoids consuming the quit request in splash
-		// screen event processing before app.exec() starts.
-		QTimer::singleShot(2000, QCoreApplication::instance(), []()
+		// loop. Startup processes nested event loops, where a one-shot quit
+		// request can be consumed before app.exec() starts. Keep requesting
+		// shutdown until the top-level loop handles it.
+		QTimer* quitTimer = new QTimer(this);
+		quitTimer->setInterval(2000);
+		QObject::connect(quitTimer, &QTimer::timeout,
+		                 QCoreApplication::instance(), []()
 		{
 			QCoreApplication::quit();
 		});
+		quitTimer->start();
 	}
 }
 
