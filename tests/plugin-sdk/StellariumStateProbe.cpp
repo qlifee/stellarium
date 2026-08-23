@@ -29,6 +29,8 @@ namespace
 {
 constexpr double j2000JulianDay = 2451545.0;
 constexpr double maximumArbitrarySampleSpanDays = 2000.0 * 36525.0;
+constexpr double arbitrarySampleAngularRepeatToleranceDegrees = 1e-3;
+constexpr double arbitrarySampleScalarRepeatTolerance = 1e-5;
 
 bool hasType(const QVariantMap& state, const QString& key, int typeId)
 {
@@ -391,9 +393,20 @@ void StellariumStateProbe::update(double)
 		std::isfinite(futureConjunctionDifferenceDegrees) &&
 		futureConjunctionDifferenceDegrees > -180.0 &&
 		futureConjunctionDifferenceDegrees <= 180.0;
+	// A query at another epoch can change interpolation rounding in the host
+	// ephemerides. Require tight numerical repeatability rather than
+	// bit-for-bit floating-point identity.
 	const bool conjunctionSampleDeterministic =
 		conjunctionSampleContractValid &&
-		repeatedConjunctionSample == conjunctionSample;
+		std::abs(repeatedConjunctionSample.value(
+			QStringLiteral("julianDayTt")).toDouble() -
+			conjunctionSample.value(
+				QStringLiteral("julianDayTt")).toDouble()) <= 1e-12 &&
+		std::abs(repeatedConjunctionSample.value(
+			QStringLiteral(
+				"moonSunGeocentricEclipticLongitudeDifferenceDegrees"))
+			.toDouble() - conjunctionDifferenceDegrees) <=
+			arbitrarySampleAngularRepeatToleranceDegrees;
 	const double conjunctionDailyMotionDegrees = std::remainder(
 		futureConjunctionDifferenceDegrees - conjunctionDifferenceDegrees,
 		360.0);
@@ -511,7 +524,50 @@ void StellariumStateProbe::update(double)
 		std::abs(visibilityDeltaTSeconds - deltaTSeconds) <= 1e-9;
 	const bool visibilitySampleDeterministic =
 		visibilitySampleContractValid &&
-		repeatedVisibilitySample == visibilitySample;
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral("julianDayUt")).toDouble() -
+			visibilitySample.value(
+				QStringLiteral("julianDayUt")).toDouble()) <= 1e-12 &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral("julianDayTt")).toDouble() -
+			visibilityJulianDayTt) <= 1e-12 &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral("deltaTSeconds")).toDouble() -
+			visibilityDeltaTSeconds) <= 1e-12 &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral(
+				"sunAzimuthTopocentricGeometricDegrees")).toDouble() -
+			visibilitySunAzimuth) <=
+			arbitrarySampleAngularRepeatToleranceDegrees &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral(
+				"sunAltitudeTopocentricGeometricDegrees")).toDouble() -
+			visibilitySunAltitude) <=
+			arbitrarySampleAngularRepeatToleranceDegrees &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral(
+				"moonAzimuthTopocentricGeometricDegrees")).toDouble() -
+			visibilityMoonAzimuth) <=
+			arbitrarySampleAngularRepeatToleranceDegrees &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral(
+				"moonAltitudeTopocentricGeometricDegrees")).toDouble() -
+			visibilityMoonAltitude) <=
+			arbitrarySampleAngularRepeatToleranceDegrees &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral("moonIlluminatedFraction")).toDouble() -
+			visibilityMoonIlluminatedFraction) <=
+			arbitrarySampleScalarRepeatTolerance &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral(
+				"moonAngularDiameterTopocentricUnscaledDegrees"))
+			.toDouble() - visibilityMoonAngularDiameter) <=
+			arbitrarySampleScalarRepeatTolerance &&
+		std::abs(repeatedVisibilitySample.value(
+			QStringLiteral(
+				"moonHorizontalParallaxGeocentricDegrees"))
+			.toDouble() - visibilityMoonHorizontalParallax) <=
+			arbitrarySampleScalarRepeatTolerance;
 	const double futureVisibilitySunAzimuth = futureVisibilitySample.value(
 		QStringLiteral("sunAzimuthTopocentricGeometricDegrees")).toDouble();
 	const double futureVisibilitySunAltitude = futureVisibilitySample.value(

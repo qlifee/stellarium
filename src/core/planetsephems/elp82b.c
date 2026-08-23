@@ -162731,8 +162731,12 @@ static const double q3 =  1.265417e-9;
 static const double q4 = -1.371808e-12;
 static const double q5 = -3.20334e-15;
 
-static void Elp82bSphericalToRectangular(const double t,
-                                         const double r[3],double xyz[3]) {
+void GetElp82bCoor(const double jd,double xyz[3]) {
+  const double t = (jd - 2451545.0) / 36525.0;
+  double r[3];
+  CalcInterpolatedElements(t,r,3,&GetElp82bSphericalCoor,DELTA_T,
+                           &t_0,r_0,&t_1,r_1,&t_2,r_2,0);
+  {
     const double rh = r[2] * cos(r[1]);
     const double x3 = r[2] * sin(r[1]);
     const double x1 = rh * cos(r[0]);
@@ -162757,22 +162761,8 @@ static void Elp82bSphericalToRectangular(const double t,
 
 /*
     printf("Moon: %f  %22.15f %22.15f %22.15f\n",
-           2451545.0+t*36525.0,xyz[0],xyz[1],xyz[2]);
+           jd,xyz[0],xyz[1],xyz[2]);
 */
-}
-
-void GetElp82bCoor(const double jd,double xyz[3]) {
-  const double t = (jd - 2451545.0) / 36525.0;
-  double r[3];
-  CalcInterpolatedElements(t,r,3,&GetElp82bSphericalCoor,DELTA_T,
-                           &t_0,r_0,&t_1,r_1,&t_2,r_2,0);
-  Elp82bSphericalToRectangular(t,r,xyz);
-}
-
-void GetElp82bCoorUncached(const double jd,double xyz[3]) {
-  const double t = (jd - 2451545.0) / 36525.0;
-  double r[3];
-  GetElp82bSphericalCoor(t,r,0);
-  Elp82bSphericalToRectangular(t,r,xyz);
+  }
 }
 

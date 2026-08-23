@@ -17,7 +17,6 @@
 #include "StelUtils.hpp"
 #include "modules/Planet.hpp"
 #include "modules/SolarSystem.hpp"
-#include "planetsephems/EphemWrapper.hpp"
 #include "planetsephems/precession.h"
 #include "planetsephems/sidereal_time.h"
 
@@ -75,14 +74,16 @@ bool resolveSunMoonEarth(const StelCore* core, SolarSystem*& solarSystem,
 	return !sun.isNull() && !moon.isNull() && !earth.isNull();
 }
 
-bool computeGeometricEarthMoonState(double julianDayTt,
-	Vec3d& earthHeliocentric, Vec3d& moonGeocentric)
+bool computeGeometricEarthMoonState(const PlanetP& earth,
+	const PlanetP& moon, double julianDayTt, Vec3d& earthHeliocentric,
+	Vec3d& moonGeocentric)
 {
-	return get_earth_helio_coords_uncached(
-		       julianDayTt, &earthHeliocentric[0]) &&
-		get_lunar_parent_coords_uncached(
-			julianDayTt, &moonGeocentric[0]) &&
-		finiteVector(earthHeliocentric) && finiteVector(moonGeocentric) &&
+	Vec3d earthVelocity;
+	Vec3d moonVelocity;
+	earth->computePosition(julianDayTt, earthHeliocentric, earthVelocity);
+	moon->computePosition(julianDayTt, moonGeocentric, moonVelocity);
+	return finiteVector(earthHeliocentric) && finiteVector(earthVelocity) &&
+		finiteVector(moonGeocentric) && finiteVector(moonVelocity) &&
 		earthHeliocentric.normSquared() > 0.0 &&
 		moonGeocentric.normSquared() > 0.0;
 }
@@ -307,13 +308,11 @@ QVariantMap StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
 		return {};
 	Q_UNUSED(solarSystem)
 	Q_UNUSED(sun)
-	Q_UNUSED(moon)
-	Q_UNUSED(earth)
 
 	Vec3d earthHeliocentric;
 	Vec3d moonGeocentric;
 	if(!computeGeometricEarthMoonState(
-		   julianDayTt, earthHeliocentric, moonGeocentric))
+		   earth, moon, julianDayTt, earthHeliocentric, moonGeocentric))
 	{
 		return {};
 	}
@@ -388,7 +387,7 @@ QVariantMap StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
 	Vec3d earthHeliocentric;
 	Vec3d moonGeocentric;
 	if(!computeGeometricEarthMoonState(
-		   julianDayTt, earthHeliocentric, moonGeocentric))
+		   earth, moon, julianDayTt, earthHeliocentric, moonGeocentric))
 	{
 		return {};
 	}
