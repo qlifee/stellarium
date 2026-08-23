@@ -1,0 +1,18 @@
+{
+  "stellarium_version": "@VERSION@",
+  "plugin_interface_iid": "org.stellarium.StelPluginInterface/2.0",
+  "architecture": "@STELLARIUM_PLUGIN_ABI_ARCHITECTURE@",
+  "compiler_id": "@CMAKE_CXX_COMPILER_ID@",
+  "compiler_version": "@CMAKE_CXX_COMPILER_VERSION@",
+  "msvc_toolset_version": "@MSVC_TOOLSET_VERSION@",
+  "qt_version": "@QT_VERSION@",
+  "build_configuration": "@STELLARIUM_PLUGIN_ABI_CONFIGURATION@",
+  "msvc_runtime": "@STELLARIUM_PLUGIN_ABI_MSVC_RUNTIME@",
+  "compatibility_policy": "Plug-ins must match this exact Stellarium release, architecture, compiler family and toolset, Qt build, build configuration, and MSVC runtime. Compatibility with other Stellarium releases is not guaranteed.",
+  "api_scope": "Only declarations in the installed supported_headers constitute this proof SDK's public plug-in API. Other exported stelMain symbols are not implicitly supported.",
+  "supported_headers": [
+    "StelMainExport.hpp",
+    "core/StelModule.hpp",
+    "core/StelPluginInterface.hpp"
+  ]
+}

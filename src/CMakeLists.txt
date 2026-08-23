@@ -601,13 +601,81 @@ IF(GENERATE_STELMAINLIB)
           # symbol for an export, which causes an unresolved-symbol link error.
           SET_TARGET_PROPERTIES(stelMain PROPERTIES
                WINDOWS_EXPORT_ALL_SYMBOLS ON
-               DISABLE_PRECOMPILE_HEADERS ON)
+               DISABLE_PRECOMPILE_HEADERS ON
+               MSVC_RUNTIME_LIBRARY
+                    "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
      ENDIF()
      TARGET_LINK_LIBRARIES(stelMain PUBLIC ${STELMAIN_DEPS})
-     INSTALL(TARGETS stelMain
-          RUNTIME DESTINATION bin
-          LIBRARY DESTINATION lib
-          ARCHIVE DESTINATION lib)
+     IF(MSVC)
+          INSTALL(TARGETS stelMain
+               RUNTIME DESTINATION bin CONFIGURATIONS Release
+               LIBRARY DESTINATION lib CONFIGURATIONS Release
+               ARCHIVE DESTINATION lib CONFIGURATIONS Release)
+     ELSE()
+          INSTALL(TARGETS stelMain
+               RUNTIME DESTINATION bin
+               LIBRARY DESTINATION lib
+               ARCHIVE DESTINATION lib)
+     ENDIF()
+     IF(WIN32 AND MSVC)
+          # Install the smallest external plug-in SDK needed to build a
+          # StelModule against the release DLL. Do not export stelMain's
+          # in-tree PUBLIC dependency graph: it contains bundled targets
+          # which are intentionally not part of this SDK.
+          INCLUDE(GNUInstallDirs)
+          INCLUDE(CMakePackageConfigHelpers)
+
+          IF(STELLARIUM_BUILD_ARM64)
+               SET(STELLARIUM_PLUGIN_ABI_ARCHITECTURE "arm64")
+          ELSEIF(CMAKE_SIZEOF_VOID_P EQUAL 8)
+               SET(STELLARIUM_PLUGIN_ABI_ARCHITECTURE "x64")
+          ELSE()
+               SET(STELLARIUM_PLUGIN_ABI_ARCHITECTURE "x86")
+          ENDIF()
+
+          SET(STELLARIUM_PLUGIN_ABI_CONFIGURATION "Release")
+          SET(STELLARIUM_PLUGIN_ABI_MSVC_RUNTIME "MultiThreadedDLL")
+          SET(STELLARIUM_PLUGIN_SDK_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}/stellarium")
+          SET(STELLARIUM_PLUGIN_SDK_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/Stellarium")
+          SET(STELLARIUM_PLUGIN_SDK_DATADIR "${CMAKE_INSTALL_DATADIR}/stellarium/plugin-sdk")
+
+          CONFIGURE_PACKAGE_CONFIG_FILE(
+               "${PROJECT_SOURCE_DIR}/cmake/StellariumConfig.cmake.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfig.cmake"
+               INSTALL_DESTINATION "${STELLARIUM_PLUGIN_SDK_CMAKEDIR}"
+               PATH_VARS
+                    CMAKE_INSTALL_BINDIR
+                    CMAKE_INSTALL_LIBDIR
+                    STELLARIUM_PLUGIN_SDK_INCLUDEDIR
+                    STELLARIUM_PLUGIN_SDK_DATADIR)
+          WRITE_BASIC_PACKAGE_VERSION_FILE(
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfigVersion.cmake"
+               VERSION "${VERSION}"
+               COMPATIBILITY ExactVersion)
+          CONFIGURE_FILE(
+               "${PROJECT_SOURCE_DIR}/cmake/StellariumPluginBuildInfo.json.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumPluginBuildInfo.json"
+               @ONLY)
+
+          INSTALL(FILES
+               "${PROJECT_SOURCE_DIR}/src/StelMainExport.hpp"
+               DESTINATION "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}"
+               CONFIGURATIONS Release)
+          INSTALL(FILES
+               "${PROJECT_SOURCE_DIR}/src/core/StelModule.hpp"
+               "${PROJECT_SOURCE_DIR}/src/core/StelPluginInterface.hpp"
+               DESTINATION "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}/core"
+               CONFIGURATIONS Release)
+          INSTALL(FILES
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfig.cmake"
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfigVersion.cmake"
+               DESTINATION "${STELLARIUM_PLUGIN_SDK_CMAKEDIR}"
+               CONFIGURATIONS Release)
+          INSTALL(FILES
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumPluginBuildInfo.json"
+               DESTINATION "${STELLARIUM_PLUGIN_SDK_DATADIR}"
+               CONFIGURATIONS Release)
+     ENDIF()
      # WIN32 creates a windows app without console, no effect on non-win platforms
      IF(${QT_VERSION_MAJOR} EQUAL "5")
           ADD_EXECUTABLE(stellarium WIN32 ${stellarium_exe_SRCS})
