@@ -522,13 +522,19 @@ SET(STELLARIUM_GUI_MODE Standard CACHE STRING "Choose the type of GUI to build, 
 
 SET(GENERATE_PACKAGE_TARGET 1 CACHE BOOL "Set to 1 or true if you want to have make package target")
 
-# On WIN32 we need to split the main binary into a small binary and a dll
-# This is for allowing to link dynamic plug-ins afterward
-# It does not seem to work with MSVC, so I disable it for the moment.
+# On WIN32 we need to split the main binary into a small binary and a DLL
+# to allow dynamic plug-ins to link against Stellarium. Keep the historical
+# MinGW default and allow an explicit Qt6/MSVC proof-of-concept build.
 IF(WIN32 AND NOT MSVC)
-     SET(GENERATE_STELMAINLIB 1)
+     SET(GENERATE_STELMAINLIB_DEFAULT 1)
 ELSE()
-     SET(GENERATE_STELMAINLIB 0)
+     SET(GENERATE_STELMAINLIB_DEFAULT 0)
+ENDIF()
+SET(GENERATE_STELMAINLIB ${GENERATE_STELMAINLIB_DEFAULT} CACHE BOOL "Build the main Stellarium code as a shared library")
+UNSET(GENERATE_STELMAINLIB_DEFAULT)
+
+IF(GENERATE_STELMAINLIB AND WIN32 AND MSVC AND NOT Qt6_FOUND)
+     MESSAGE(FATAL_ERROR "A shared stelMain library under MSVC requires Qt6")
 ENDIF()
 
 ########### User Guide ###############

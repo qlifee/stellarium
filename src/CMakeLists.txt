@@ -10,6 +10,7 @@ IF(ENABLE_SPOUT)
 ENDIF()
 
 SET(stellarium_lib_SRCS
+     StelMainExport.hpp
      core/BlueNoiseTriangleRemapped.hpp
      core/StelSRGB.hpp
      core/StelSRGB.cpp
@@ -590,8 +591,19 @@ ENDIF()
 # Main executable/library setup
 IF(GENERATE_STELMAINLIB)
      ADD_LIBRARY(stelMain SHARED ${stellarium_lib_SRCS} ${stellarium_RES_CXX})
+     TARGET_COMPILE_DEFINITIONS(stelMain
+          PRIVATE STELMAIN_BUILD
+          INTERFACE STELMAIN_USE_DLL)
+     IF(MSVC)
+          # Initial proof of concept for linking third-party plug-ins. A
+          # dedicated public API export macro may replace this broad export.
+          SET_TARGET_PROPERTIES(stelMain PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+     ENDIF()
      TARGET_LINK_LIBRARIES(stelMain PUBLIC ${STELMAIN_DEPS})
-     INSTALL(TARGETS stelMain DESTINATION bin)
+     INSTALL(TARGETS stelMain
+          RUNTIME DESTINATION bin
+          LIBRARY DESTINATION lib
+          ARCHIVE DESTINATION lib)
      # WIN32 creates a windows app without console, no effect on non-win platforms
      IF(${QT_VERSION_MAJOR} EQUAL "5")
           ADD_EXECUTABLE(stellarium WIN32 ${stellarium_exe_SRCS})
@@ -728,7 +740,7 @@ IF(WIN32)
 			 ${VIRTUAL_KBD_SETTING}
 			 ${_qt_paths}
 			 --compiler-runtime
-			 \"\${CMAKE_INSTALL_PREFIX}/lib/libstelMain.dll\"
+			 \"\${CMAKE_INSTALL_PREFIX}/bin/$<TARGET_FILE_NAME:stelMain>\"
 		    WORKING_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/bin\"
 		    OUTPUT_FILE \"\${CMAKE_CURRENT_BINARY_DIR}/windeployqt-dll.log\"
 		    ERROR_FILE \"\${CMAKE_CURRENT_BINARY_DIR}/windeployqt-dll.err\"
