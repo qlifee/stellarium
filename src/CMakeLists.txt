@@ -55,6 +55,8 @@ SET(stellarium_lib_SRCS
      core/StelApp.hpp
      core/StelCore.cpp
      core/StelCore.hpp
+     core/StelPluginAPI.cpp
+     core/StelPluginAPI.hpp
      core/StelFileMgr.cpp
      core/StelFileMgr.hpp
      core/StelLocaleMgr.cpp

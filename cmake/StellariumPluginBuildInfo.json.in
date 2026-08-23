@@ -17,19 +17,47 @@
   "msvc_runtime": "@STELLARIUM_PLUGIN_ABI_MSVC_RUNTIME@",
   "compatibility_policy": "Plug-ins must match this exact Stellarium release and package build identity, architecture, compiler family and toolset, Qt build, build configuration, and MSVC runtime. Compatibility with other Stellarium releases or separately rebuilt packages is not guaranteed.",
   "api_scope": "api_headers are the supported entry headers. dependency_headers are installed only to satisfy their includes. supported_headers is retained as a compatibility alias for installed_headers. This proof validates only validated_operations; other declarations and exported stelMain symbols are not implicitly endorsed.",
-  "abi_notes": "In the validated MSVC DLL build, STELMAIN_USE_DLL makes the class-level STELMAIN_EXPORT resolve to Q_DECL_IMPORT, so the plug-in imports StelApp::isInitialized(), getInstance(), and getModule() from stelMain.dll, including the first two operations whose source declarations are inline. They do not directly import the private singleton data. This remains a private C++ class ABI: use only this exact SDK/package pair and consume all required compile definitions through Stellarium::stelMain.",
+  "abi_notes": "In the validated MSVC DLL build, STELMAIN_USE_DLL makes the class-level STELMAIN_EXPORT resolve to Q_DECL_IMPORT, so the plug-in imports the validated StelApp operations from stelMain.dll instead of directly importing private data. StelApp::getCore() is supported only to obtain the opaque borrowed pointer accepted by StelPluginAPI::getCoreStateSnapshot(). The returned QVariantMap is a copied value containing only QtCore scalar and QString payloads; it exposes no internal object layouts and returns no internal pointers. QVariantMap still crosses the C++ DLL boundary, so use only this exact SDK/package pair and consume all required compile definitions through Stellarium::stelMain.",
+  "core_state_snapshot": {
+    "operation": "StelPluginAPI::getCoreStateSnapshot(const StelCore*)",
+    "return_type": "QVariantMap",
+    "null_input_behavior": "returns an empty map",
+    "pointer_contract": "Pass only the opaque borrowed pointer returned by StelApp::getCore() from the matching running Stellarium host; do not dereference it or retain and use it after host shutdown.",
+    "thread_contract": "Call only on the Stellarium main thread.",
+    "abi_contract": "QVariantMap crosses the C++ DLL boundary and requires the exact matching Qt build, MSVC toolset, build configuration, and runtime.",
+    "layout_contract": "The copied snapshot exposes no StelCore or StelLocation object layout and returns no internal pointers.",
+    "fields": {
+      "schemaVersion": "int",
+      "julianDayUt": "double",
+      "julianDayTt": "double",
+      "deltaTSeconds": "double",
+      "utcOffsetHours": "double",
+      "timeRateJdPerSecond": "double",
+      "longitudeDegrees": "double",
+      "latitudeDegrees": "double",
+      "currentTimeZone": "QString",
+      "locationTimeZone": "QString",
+      "locationId": "QString",
+      "planetName": "QString",
+      "locationValid": "bool",
+      "altitudeMeters": "int"
+    }
+  },
   "validated_capabilities": [
     "plugin-interface metadata",
     "module construction and initialization",
     "application initialization check",
-    "application module lookup"
+    "application module lookup",
+    "read-only current core time and location snapshot"
   ],
   "validated_operations": [
     "StelModule construction and getModuleVersion()",
     "StelPluginInterface metadata and module creation",
     "StelApp::isInitialized()",
     "StelApp::getInstance()",
-    "StelApp::getModule()"
+    "StelApp::getModule()",
+    "StelApp::getCore() as an opaque snapshot input",
+    "StelPluginAPI::getCoreStateSnapshot(const StelCore*)"
   ],
   "required_qt_components": [
 @STELLARIUM_PLUGIN_SDK_QT_COMPONENTS_JSON@

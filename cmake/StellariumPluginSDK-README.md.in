@@ -13,24 +13,63 @@ them:
 
 @STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS_MARKDOWN@
 
-This surface is sufficient to implement `StelModule` and `StelPluginInterface`
-and to use the tested `StelApp` initialization and module-lookup operations. It
-remains insufficient for most full-featured plug-ins. Installing
-a dependency header does not make all of its declarations an independent
-public API. Untested declarations, other source-tree headers, and other symbols
-visible from `stelMain.dll` are not implicitly endorsed, even if the compiler
-or linker can see them.
+This surface is sufficient to implement `StelModule` and `StelPluginInterface`,
+to use the tested `StelApp` initialization and module-lookup operations, and to
+copy the validated read-only core time/location snapshot. It remains
+insufficient for most full-featured plug-ins. Installing a dependency header
+does not make all of its declarations an independent public API. Untested
+declarations, other source-tree headers, and other symbols visible from
+`stelMain.dll` are not implicitly endorsed, even if the compiler or linker can
+see them.
 
 For `StelApp`, this proof specifically validates `isInitialized()`,
-`getInstance()`, and `getModule()`. Although the first two are declared inline,
-the validated MSVC DLL contract uses `STELMAIN_USE_DLL` to make the class-level
-`STELMAIN_EXPORT` resolve to `Q_DECL_IMPORT`. The external probe therefore
-imports all three functions from `stelMain.dll` instead of directly importing
-the private singleton data. This is still a private C++ class ABI supported
+`getInstance()`, `getModule()`, and `getCore()`. Although some of these are
+declared inline, the validated MSVC DLL contract uses `STELMAIN_USE_DLL` to make
+the class-level `STELMAIN_EXPORT` resolve to `Q_DECL_IMPORT`. The external probe
+therefore imports the validated functions from `stelMain.dll` instead of
+directly importing private data. This is still a private C++ class ABI supported
 only by this archive's exact-build contract and required compile definitions.
-Other inline accessors may compile differently or touch private layout, and
-forward-declared return types require future SDK headers before they can be
-used. Treat them as outside this proof's API surface.
+`getCore()` is validated only for obtaining the opaque pointer accepted by the
+snapshot function below. Other inline accessors and forward-declared return
+types remain outside this proof's API surface.
+
+## Read-only core state snapshot
+
+`core/StelPluginAPI.hpp` declares this exported free function:
+
+```cpp
+QVariantMap StelPluginAPI::getCoreStateSnapshot(const StelCore* core);
+```
+
+Pass only the opaque pointer returned by `StelApp::getInstance().getCore()` from
+the matching running Stellarium host, and call the function only on Stellarium's
+main thread. Do not dereference the pointer, pass a pointer from another host,
+or retain and use it after host shutdown. A null pointer returns an empty map.
+
+For a non-null pointer, the returned map has these exact keys and value types:
+
+| Key | C++ value type | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | `int` | Snapshot schema version; currently `1`. |
+| `julianDayUt` | `double` | Current Julian Day in UT. |
+| `julianDayTt` | `double` | Current Julian Day in TT. |
+| `deltaTSeconds` | `double` | Current TT-minus-UT value in seconds. |
+| `utcOffsetHours` | `double` | UTC offset applied by the core at `julianDayUt`, in hours. |
+| `timeRateJdPerSecond` | `double` | Simulation rate in Julian days per second. |
+| `longitudeDegrees` | `double` | Current longitude in degrees, east-positive. |
+| `latitudeDegrees` | `double` | Current latitude in degrees, north-positive. |
+| `currentTimeZone` | `QString` | Time zone currently used by the core. |
+| `locationTimeZone` | `QString` | Time zone recorded in the current location. |
+| `locationId` | `QString` | Current location identifier. |
+| `planetName` | `QString` | Current location's planet name. |
+| `locationValid` | `bool` | Whether the current location is valid. |
+| `altitudeMeters` | `int` | Current altitude in metres. |
+
+The map is a copied snapshot. It does not expose `StelCore` or `StelLocation`
+object layouts and does not return internal pointers. `QVariantMap`, `QString`,
+and `QVariant` still cross the C++ DLL boundary, so this operation has the same
+exact Qt, MSVC toolset, build-configuration, and runtime requirements as the
+rest of this SDK. It is not a stable ABI across Qt or Stellarium releases.
 
 The imported `Stellarium::stelMain` target supplies these definitions from the
 matching Stellarium build:

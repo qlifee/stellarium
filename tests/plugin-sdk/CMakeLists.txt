@@ -32,6 +32,7 @@ endif()
 set(_expected_api_headers
 	"core/StelApp.hpp"
 	"core/StelModule.hpp"
+	"core/StelPluginAPI.hpp"
 	"core/StelPluginInterface.hpp")
 set(_expected_dependency_headers
 	"StelMainExport.hpp"

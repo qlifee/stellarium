@@ -4,6 +4,7 @@
 SET(STELLARIUM_PLUGIN_SDK_API_HEADERS
      "core/StelApp.hpp"
      "core/StelModule.hpp"
+     "core/StelPluginAPI.hpp"
      "core/StelPluginInterface.hpp")
 
 SET(STELLARIUM_PLUGIN_SDK_DEPENDENCY_HEADERS

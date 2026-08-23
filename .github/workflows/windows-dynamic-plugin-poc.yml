@@ -270,6 +270,7 @@ jobs:
           $expectedApiHeaders = @(
             'core/StelApp.hpp',
             'core/StelModule.hpp',
+            'core/StelPluginAPI.hpp',
             'core/StelPluginInterface.hpp'
           )
           $expectedDependencyHeaders = @(
@@ -282,6 +283,7 @@ jobs:
             'StelMainExport.hpp',
             'core/StelApp.hpp',
             'core/StelModule.hpp',
+            'core/StelPluginAPI.hpp',
             'core/StelPluginInterface.hpp',
             'core/StelTextureTypes.hpp',
             'core/StelUtils.hpp',
@@ -416,6 +418,62 @@ jobs:
             throw 'The packaged SDK describes unexpected Qt components'
           }
 
+          $snapshot = $buildInfo.core_state_snapshot
+          if ($null -eq $snapshot -or
+              $snapshot.operation -cne `
+                'StelPluginAPI::getCoreStateSnapshot(const StelCore*)' -or
+              $snapshot.return_type -cne 'QVariantMap' -or
+              $snapshot.null_input_behavior -cne 'returns an empty map' -or
+              [string]::IsNullOrWhiteSpace(
+                [string]$snapshot.pointer_contract) -or
+              [string]::IsNullOrWhiteSpace(
+                [string]$snapshot.thread_contract) -or
+              [string]::IsNullOrWhiteSpace(
+                [string]$snapshot.abi_contract) -or
+              [string]::IsNullOrWhiteSpace(
+                [string]$snapshot.layout_contract)) {
+            throw 'The packaged SDK omits the core-state snapshot contract'
+          }
+          $expectedSnapshotFields = [ordered]@{
+            schemaVersion = 'int'
+            julianDayUt = 'double'
+            julianDayTt = 'double'
+            deltaTSeconds = 'double'
+            utcOffsetHours = 'double'
+            timeRateJdPerSecond = 'double'
+            longitudeDegrees = 'double'
+            latitudeDegrees = 'double'
+            currentTimeZone = 'QString'
+            locationTimeZone = 'QString'
+            locationId = 'QString'
+            planetName = 'QString'
+            locationValid = 'bool'
+            altitudeMeters = 'int'
+          }
+          $actualSnapshotFields = @(
+            $snapshot.fields.PSObject.Properties.Name)
+          if (($actualSnapshotFields -join "`n") -cne `
+              (@($expectedSnapshotFields.Keys) -join "`n")) {
+            throw 'The packaged SDK describes unexpected snapshot fields'
+          }
+          foreach ($field in $expectedSnapshotFields.Keys) {
+            if ($snapshot.fields.$field -cne `
+                $expectedSnapshotFields[$field]) {
+              throw "The packaged SDK has the wrong type for snapshot field $field"
+            }
+          }
+          foreach ($operation in @(
+              'StelApp::getCore() as an opaque snapshot input',
+              'StelPluginAPI::getCoreStateSnapshot(const StelCore*)')) {
+            if (@($buildInfo.validated_operations) -cnotcontains $operation) {
+              throw "The packaged SDK omits validated operation $operation"
+            }
+          }
+          if (@($buildInfo.validated_capabilities) -cnotcontains `
+              'read-only current core time and location snapshot') {
+            throw 'The packaged SDK omits the snapshot capability'
+          }
+
           $configPath = Join-Path $sdkRoot `
             'lib/cmake/Stellarium/StellariumConfig.cmake'
           $config = (Get-Content -LiteralPath $configPath -Raw) `
@@ -446,7 +504,7 @@ jobs:
           "archive=$archive" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
           "checksum=$archiveChecksum" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT
-          "Verified: the exact SDK ZIP is self-described, checksummed, relocatable, and has the expected minimal contents." |
+          "Verified: the exact SDK ZIP is self-described, checksummed, relocatable, and contains the expected minimal API including the read-only core-state facade." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Install
@@ -471,6 +529,7 @@ jobs:
             'include/stellarium/StelMainExport.hpp',
             'include/stellarium/core/StelApp.hpp',
             'include/stellarium/core/StelModule.hpp',
+            'include/stellarium/core/StelPluginAPI.hpp',
             'include/stellarium/core/StelPluginInterface.hpp',
             'include/stellarium/core/StelTextureTypes.hpp',
             'include/stellarium/core/StelUtils.hpp',
@@ -556,7 +615,7 @@ jobs:
             }
           }
 
-          "Verified: the installed SDK contains the required public headers, DLL/import library, and version-locked CMake metadata." |
+          "Verified: the installed SDK contains the required public headers, read-only core-state facade, DLL/import library, and version-locked CMake metadata." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Verify DLL, import library, and exports
@@ -640,7 +699,9 @@ jobs:
           foreach ($apiSymbol in @(
               'isInitialized@StelApp',
               'getInstance@StelApp',
-              'getModule@StelApp')) {
+              'getModule@StelApp',
+              'getCore@StelApp',
+              'getCoreStateSnapshot@StelPluginAPI')) {
             if (-not (Select-String -LiteralPath $dllExports `
                 -SimpleMatch $apiSymbol) -or
                 -not (Select-String -LiteralPath $importMembers `
@@ -656,7 +717,8 @@ jobs:
 
           "Verified: stellarium.exe loads stelMain.dll." | Add-Content $env:GITHUB_STEP_SUMMARY
           "Verified: stelMain.lib exists for external MSVC consumers." | Add-Content $env:GITHUB_STEP_SUMMARY
-          "Verified: required Stellarium symbol families are exported." | Add-Content $env:GITHUB_STEP_SUMMARY
+          "Verified: required Stellarium symbol families and the read-only core-state facade are exported." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Build the standalone plug-in from the packaged SDK
         run: |
@@ -808,15 +870,22 @@ jobs:
               foreach ($apiSymbol in @(
                   'isInitialized@StelApp',
                   'getInstance@StelApp',
-                  'getModule@StelApp')) {
+                  'getModule@StelApp',
+                  'getCore@StelApp',
+                  'getCoreStateSnapshot@StelPluginAPI')) {
                 if (-not (Select-String -LiteralPath $imports `
                     -SimpleMatch $apiSymbol)) {
                   throw "StellariumStateProbe does not import $apiSymbol"
                 }
               }
-              if (Select-String -LiteralPath $imports `
-                  -SimpleMatch 'singleton@StelApp') {
-                throw 'StellariumStateProbe unexpectedly imports the private StelApp singleton'
+              foreach ($forbiddenApiSymbol in @(
+                  'singleton@StelApp',
+                  '@StelCore',
+                  '@StelLocation')) {
+                if (Select-String -LiteralPath $imports `
+                    -SimpleMatch $forbiddenApiSymbol) {
+                  throw "StellariumStateProbe unexpectedly imports $forbiddenApiSymbol"
+                }
               }
             }
 
@@ -862,7 +931,7 @@ jobs:
               (Join-Path $diagnostics 'plugin-proof-sha256.txt') `
               -Encoding utf8
 
-          "Verified: both external plug-ins import stelMain.dll and load through Qt's plug-in interface; StellariumStateProbe imports the tested StelApp symbols." |
+          "Verified: both external plug-ins import stelMain.dll and load through Qt's plug-in interface; StellariumStateProbe uses only the tested StelApp and StelPluginAPI facade symbols for live core state." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Run DLL-linked smoke test
@@ -994,13 +1063,102 @@ jobs:
               $state.probe_id -ne 'StellariumStateProbe' -or
               $state.status -ne 'ok' -or
               $state.stellarium_version -ne '26.2.0' -or
-              $state.expected_stellarium_version -ne '26.2.0' -or
-              $state.version_matches -ne $true -or
-              $state.app_initialized -ne $true -or
-              $state.self_registered -ne $true -or
-              $state.solar_system_available -ne $true -or
-              $state.solar_system_identity_matches -ne $true) {
+              $state.expected_stellarium_version -ne '26.2.0') {
             throw "Unexpected state probe result: $($state | ConvertTo-Json -Compress)"
+          }
+          foreach ($field in @(
+              'version_matches',
+              'app_initialized',
+              'self_registered',
+              'solar_system_available',
+              'solar_system_identity_matches',
+              'null_core_returns_empty',
+              'core_state_available',
+              'core_state_schema_matches',
+              'core_state_types_match',
+              'astronomy_values_valid',
+              'ephemeris_relation_valid',
+              'location_values_valid',
+              'location_valid')) {
+            $property = $state.PSObject.Properties[$field]
+            if ($null -eq $property -or
+                $property.Value -isnot [bool] -or
+                -not $property.Value) {
+              throw "State probe field is not boolean true: $field"
+            }
+          }
+          foreach ($field in @(
+              'current_time_zone',
+              'location_time_zone')) {
+            $property = $state.PSObject.Properties[$field]
+            if ($null -eq $property -or
+                $property.Value -isnot [string]) {
+              throw "State probe field is not a string: $field"
+            }
+          }
+          foreach ($field in @('location_id', 'planet_name')) {
+            $property = $state.PSObject.Properties[$field]
+            if ($null -eq $property -or
+                $property.Value -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($property.Value)) {
+              throw "State probe field is not a nonempty string: $field"
+            }
+          }
+
+          $numericTypeCodes = @(
+            [TypeCode]::SByte,
+            [TypeCode]::Byte,
+            [TypeCode]::Int16,
+            [TypeCode]::UInt16,
+            [TypeCode]::Int32,
+            [TypeCode]::UInt32,
+            [TypeCode]::Int64,
+            [TypeCode]::UInt64,
+            [TypeCode]::Single,
+            [TypeCode]::Double,
+            [TypeCode]::Decimal
+          )
+          function Get-FiniteStateNumber {
+            param([string] $Name)
+
+            $property = $state.PSObject.Properties[$Name]
+            if ($null -eq $property -or $null -eq $property.Value) {
+              throw "State probe numeric field is missing: $Name"
+            }
+            $typeCode = [Type]::GetTypeCode($property.Value.GetType())
+            if ($typeCode -notin $numericTypeCodes) {
+              throw "State probe field is not numeric: $Name"
+            }
+            $number = [double] $property.Value
+            if ([double]::IsNaN($number) -or
+                [double]::IsInfinity($number)) {
+              throw "State probe field is not finite: $Name"
+            }
+            return $number
+          }
+
+          $julianDayUt = Get-FiniteStateNumber 'julian_day_ut'
+          $julianDayTt = Get-FiniteStateNumber 'julian_day_tt'
+          $deltaTSeconds = Get-FiniteStateNumber 'delta_t_seconds'
+          $utcOffsetHours = Get-FiniteStateNumber 'utc_offset_hours'
+          $timeRate = Get-FiniteStateNumber 'time_rate_jd_per_second'
+          $longitude = Get-FiniteStateNumber 'longitude_degrees'
+          $latitude = Get-FiniteStateNumber 'latitude_degrees'
+          $altitude = Get-FiniteStateNumber 'altitude_meters'
+
+          if ($julianDayUt -le 0.0 -or $julianDayUt -gt 100000000.0 -or
+              $julianDayTt -le 0.0 -or $julianDayTt -gt 100000000.0 -or
+              [Math]::Abs($deltaTSeconds) -gt 86400.0 -or
+              $utcOffsetHours -lt -24.0 -or $utcOffsetHours -gt 24.0 -or
+              [Math]::Abs($timeRate) -gt 1.0 -or
+              $longitude -lt -180.0 -or $longitude -gt 180.0 -or
+              $latitude -lt -90.0 -or $latitude -gt 90.0 -or
+              $altitude -lt -20000.0 -or $altitude -gt 100000.0) {
+            throw "State probe values are outside plausible ranges: $($state | ConvertTo-Json -Compress)"
+          }
+          $expectedJulianDayTt = $julianDayUt + $deltaTSeconds / 86400.0
+          if ([Math]::Abs($julianDayTt - $expectedJulianDayTt) -gt 1.0e-8) {
+            throw 'State probe JD/JDE/Delta-T relation is inconsistent'
           }
           if (-not (Test-Path -LiteralPath $log -PathType Leaf)) {
             throw 'Stellarium did not create the integration log'
@@ -1022,7 +1180,7 @@ jobs:
             throw 'Stellarium reported a dynamic-library load failure'
           }
 
-          "Verified: Stellarium discovered StellariumStateProbe, and the external plug-in read live application/module state through the packaged StelApp API before exiting cleanly." |
+          "Verified: Stellarium discovered StellariumStateProbe, and the external plug-in read validated live application, astronomy-time, and location state through the packaged StelApp/StelPluginAPI facade before exiting cleanly." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Collect build metadata

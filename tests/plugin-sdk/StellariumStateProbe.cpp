@@ -11,13 +11,26 @@
 #include "StellariumStateProbe.hpp"
 
 #include "StelApp.hpp"
+#include "StelPluginAPI.hpp"
 
 #include <QCoreApplication>
 #include <QDebug>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaType>
 #include <QTimer>
+
+#include <cmath>
+
+namespace
+{
+bool hasType(const QVariantMap& state, const QString& key, int typeId)
+{
+	const auto value = state.constFind(key);
+	return value != state.cend() && value->metaType().id() == typeId;
+}
+}
 
 StellariumStateProbe::StellariumStateProbe()
 {
@@ -33,6 +46,7 @@ void StellariumStateProbe::init()
 	bool selfRegistered = false;
 	bool solarSystemAvailable = false;
 	bool solarSystemIdentityMatches = false;
+	QVariantMap coreState;
 
 	if(appInitialized)
 	{
@@ -44,11 +58,70 @@ void StellariumStateProbe::init()
 		solarSystemAvailable = solarSystem != nullptr;
 		solarSystemIdentityMatches = solarSystemAvailable &&
 			solarSystem->objectName() == QStringLiteral("SolarSystem");
+		coreState = StelPluginAPI::getCoreStateSnapshot(app.getCore());
 	}
+
+	const bool nullCoreReturnsEmpty =
+		StelPluginAPI::getCoreStateSnapshot(nullptr).isEmpty();
+	const bool coreStateAvailable = !coreState.isEmpty();
+	const bool coreStateSchemaMatches = coreStateAvailable &&
+		coreState.value(QStringLiteral("schemaVersion")).toInt() == 1;
+	const bool coreStateTypesMatch = coreStateSchemaMatches &&
+		coreState.size() == 14 &&
+		hasType(coreState, QStringLiteral("schemaVersion"), QMetaType::Int) &&
+		hasType(coreState, QStringLiteral("julianDayUt"), QMetaType::Double) &&
+		hasType(coreState, QStringLiteral("julianDayTt"), QMetaType::Double) &&
+		hasType(coreState, QStringLiteral("deltaTSeconds"), QMetaType::Double) &&
+		hasType(coreState, QStringLiteral("utcOffsetHours"), QMetaType::Double) &&
+		hasType(coreState, QStringLiteral("timeRateJdPerSecond"), QMetaType::Double) &&
+		hasType(coreState, QStringLiteral("currentTimeZone"), QMetaType::QString) &&
+		hasType(coreState, QStringLiteral("locationTimeZone"), QMetaType::QString) &&
+		hasType(coreState, QStringLiteral("locationId"), QMetaType::QString) &&
+		hasType(coreState, QStringLiteral("locationValid"), QMetaType::Bool) &&
+		hasType(coreState, QStringLiteral("longitudeDegrees"), QMetaType::Double) &&
+		hasType(coreState, QStringLiteral("latitudeDegrees"), QMetaType::Double) &&
+		hasType(coreState, QStringLiteral("altitudeMeters"), QMetaType::Int) &&
+		hasType(coreState, QStringLiteral("planetName"), QMetaType::QString);
+
+	const double julianDayUt =
+		coreState.value(QStringLiteral("julianDayUt")).toDouble();
+	const double julianDayTt =
+		coreState.value(QStringLiteral("julianDayTt")).toDouble();
+	const double deltaTSeconds =
+		coreState.value(QStringLiteral("deltaTSeconds")).toDouble();
+	const double utcOffsetHours =
+		coreState.value(QStringLiteral("utcOffsetHours")).toDouble();
+	const double timeRateJdPerSecond =
+		coreState.value(QStringLiteral("timeRateJdPerSecond")).toDouble();
+	const double longitudeDegrees =
+		coreState.value(QStringLiteral("longitudeDegrees")).toDouble();
+	const double latitudeDegrees =
+		coreState.value(QStringLiteral("latitudeDegrees")).toDouble();
+	const bool astronomyValuesValid = coreStateTypesMatch &&
+		std::isfinite(julianDayUt) && julianDayUt > 0.0 &&
+		std::isfinite(julianDayTt) && julianDayTt > 0.0 &&
+		std::isfinite(deltaTSeconds) &&
+		std::isfinite(utcOffsetHours) &&
+		utcOffsetHours >= -24.0 && utcOffsetHours <= 24.0 &&
+		std::isfinite(timeRateJdPerSecond);
+	const bool ephemerisRelationValid = astronomyValuesValid &&
+		std::abs(julianDayTt -
+		         (julianDayUt + deltaTSeconds / 86400.0)) <= 1e-9;
+	const bool locationValuesValid = coreStateTypesMatch &&
+		coreState.value(QStringLiteral("locationValid")).toBool() &&
+		std::isfinite(longitudeDegrees) &&
+		longitudeDegrees >= -180.0 && longitudeDegrees <= 180.0 &&
+		std::isfinite(latitudeDegrees) &&
+		latitudeDegrees >= -90.0 && latitudeDegrees <= 90.0 &&
+		!coreState.value(QStringLiteral("locationId")).toString().isEmpty() &&
+		!coreState.value(QStringLiteral("planetName")).toString().isEmpty();
 
 	const bool success = versionMatches && appInitialized &&
 		selfRegistered && solarSystemAvailable &&
-		solarSystemIdentityMatches;
+		solarSystemIdentityMatches && nullCoreReturnsEmpty &&
+		coreStateAvailable && coreStateSchemaMatches &&
+		coreStateTypesMatch && astronomyValuesValid &&
+		ephemerisRelationValid && locationValuesValid;
 	const QJsonObject result{
 		{QStringLiteral("schema_version"), 1},
 		{QStringLiteral("probe_id"),
@@ -63,7 +136,36 @@ void StellariumStateProbe::init()
 		{QStringLiteral("self_registered"), selfRegistered},
 		{QStringLiteral("solar_system_available"), solarSystemAvailable},
 		{QStringLiteral("solar_system_identity_matches"),
-		 solarSystemIdentityMatches}
+		 solarSystemIdentityMatches},
+		{QStringLiteral("null_core_returns_empty"), nullCoreReturnsEmpty},
+		{QStringLiteral("core_state_available"), coreStateAvailable},
+		{QStringLiteral("core_state_schema_matches"),
+		 coreStateSchemaMatches},
+		{QStringLiteral("core_state_types_match"), coreStateTypesMatch},
+		{QStringLiteral("astronomy_values_valid"), astronomyValuesValid},
+		{QStringLiteral("ephemeris_relation_valid"),
+		 ephemerisRelationValid},
+		{QStringLiteral("location_values_valid"), locationValuesValid},
+		{QStringLiteral("julian_day_ut"), julianDayUt},
+		{QStringLiteral("julian_day_tt"), julianDayTt},
+		{QStringLiteral("delta_t_seconds"), deltaTSeconds},
+		{QStringLiteral("utc_offset_hours"), utcOffsetHours},
+		{QStringLiteral("time_rate_jd_per_second"),
+		 timeRateJdPerSecond},
+		{QStringLiteral("current_time_zone"),
+		 coreState.value(QStringLiteral("currentTimeZone")).toString()},
+		{QStringLiteral("location_time_zone"),
+		 coreState.value(QStringLiteral("locationTimeZone")).toString()},
+		{QStringLiteral("location_id"),
+		 coreState.value(QStringLiteral("locationId")).toString()},
+		{QStringLiteral("location_valid"),
+		 coreState.value(QStringLiteral("locationValid")).toBool()},
+		{QStringLiteral("longitude_degrees"), longitudeDegrees},
+		{QStringLiteral("latitude_degrees"), latitudeDegrees},
+		{QStringLiteral("altitude_meters"),
+		 coreState.value(QStringLiteral("altitudeMeters")).toInt()},
+		{QStringLiteral("planet_name"),
+		 coreState.value(QStringLiteral("planetName")).toString()}
 	};
 
 	const QString sentinelPath =
