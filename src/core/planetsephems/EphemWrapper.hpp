@@ -61,6 +61,7 @@ void get_sun_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
 void get_mercury_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
 void get_venus_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
 void get_earth_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
+bool get_earth_helio_coords_uncached(double jd,double xyz[3]);
 void get_mars_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
 void get_jupiter_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
 void get_saturn_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
@@ -79,6 +80,7 @@ void get_neptune_helio_osculating_coords(double jd0,double jd,double xyz[3], dou
 void get_pluto_helio_osculating_coords(double jd0,double jd,double xyz[3], double xyzdot[3]);
 
 void get_lunar_parent_coordsv(double jde, double xyz[3], double xyzdot[3], void*);
+bool get_lunar_parent_coords_uncached(double jde,double xyz[3]);
 
 void get_phobos_parent_coordsv(double jd,double xyz[3], double xyzdot[3], void*);
 void get_deimos_parent_coordsv(double jd,double xyz[3], double xyzdot[3], void*);

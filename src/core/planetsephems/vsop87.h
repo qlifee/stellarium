@@ -62,6 +62,12 @@ void GetVsop87Coor(double jde,int body,double *xyz);
      which is the reference frame in VSOP87 and VSOP87A.
   */
 
+void GetVsop87CoorUncached(double jde,int body,double *xyz);
+  /* Evaluate the same theory directly, without reading or modifying the
+     shared interpolation cache. This is intended for isolated arbitrary-
+     epoch queries whose result must not depend on previous calls.
+  */
+
 void GetVsop87OsculatingCoor(const double jde0,const double jde, const int body,double *xyz);
   /* The oculating orbit of epoch jde0, evaluated at jde, is returned.
   */

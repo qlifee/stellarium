@@ -79,6 +79,13 @@ void GetElp82bCoor(double jd,double xyz[3]);
      ICRF, J2000 and FK5 are the same, while the transformation
      ICRF <-> VSOP87 must be done with the matrix given above.
    */
+
+void GetElp82bCoorUncached(double jd,double xyz[3]);
+  /* GetElp82bCoorUncached() evaluates the same theory directly, without
+     reading or modifying the shared interpolation cache. It is intended for
+     isolated arbitrary-epoch queries whose result must not depend on previous
+     calls.
+   */
      
 
 #ifdef __cplusplus

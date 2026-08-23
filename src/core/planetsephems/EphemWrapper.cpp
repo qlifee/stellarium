@@ -356,6 +356,39 @@ void get_earth_helio_coordsv(const double jd,double xyz[3], double xyzdot[3], vo
 	xyzdot[0]=xyz6[3]; xyzdot[1]=xyz6[4]; xyzdot[2]=xyz6[5];
 }
 
+bool get_earth_helio_coords_uncached(const double jd,double xyz[3])
+{
+	if(!std::isfinite(jd))
+		return false;
+
+	bool deOk=false;
+	double xyz6[6];
+	if(EphemWrapper::use_de440(jd))
+		deOk=GetDe440Coor(jd, EPHEM_JPL_EARTH_ID, xyz6);
+	else if(EphemWrapper::use_de441(jd))
+		deOk=GetDe441Coor(jd, EPHEM_JPL_EARTH_ID, xyz6);
+	else if(EphemWrapper::use_de430(jd))
+		deOk=GetDe430Coor(jd, EPHEM_JPL_EARTH_ID, xyz6);
+	else if(EphemWrapper::use_de431(jd))
+		deOk=GetDe431Coor(jd, EPHEM_JPL_EARTH_ID, xyz6);
+
+	if(deOk)
+	{
+		xyz[0]=xyz6[0]; xyz[1]=xyz6[1]; xyz[2]=xyz6[2];
+	}
+	else
+	{
+		double moon[3];
+		GetVsop87CoorUncached(jd,EPHEM_EMB_ID,xyz);
+		GetElp82bCoorUncached(jd,moon);
+		xyz[0]-=0.0121505677733761*moon[0];
+		xyz[1]-=0.0121505677733761*moon[1];
+		xyz[2]-=0.0121505677733761*moon[2];
+	}
+	return std::isfinite(xyz[0]) && std::isfinite(xyz[1]) &&
+		std::isfinite(xyz[2]);
+}
+
 void get_mars_helio_coordsv(double jd,double xyz[3], double xyzdot[3], void* unused)
 {
 	Q_UNUSED(unused)
@@ -433,6 +466,17 @@ void get_neptune_helio_osculating_coords(double jd0,double jd,double xyz[3], dou
  * Michelle Chapront-Touze and Jean Chapront of the Bureau des Longitudes,
  * Paris. ELP 2000-82B theory
  * param jd Julian day, rect pos */
+static void apply_lunar_figure_center_correction(double xyz[3])
+{
+	Vec3d XYZ(xyz);
+	double lng, lat, r;
+	StelUtils::rectToSphe(&lng, &lat, &r, XYZ);
+	lng+= 0.50/3600. * M_PI_180;
+	lat+=-0.25/3600. * M_PI_180;
+	StelUtils::spheToRect(lng, lat, r, XYZ);
+	xyz[0]=XYZ.v[0]; xyz[1]=XYZ.v[1]; xyz[2]=XYZ.v[2];
+}
+
 void get_lunar_parent_coordsv(double jde, double xyz[3], double xyzdot[3], void* unused)
 {
 	Q_UNUSED(unused)
@@ -465,13 +509,40 @@ void get_lunar_parent_coordsv(double jde, double xyz[3], double xyzdot[3], void*
 	// This is important for eclipse and occultation observations.
 	// See note in "Astronomical Phenomena for the year 2017", Naut.Alm.Office, USNO and HM Naut. Alm. Office, UK Hydrographic Office, 2014, p.69
 	// TBD: Find a better reference for this!
-	Vec3d XYZ(xyz);
-	double lng, lat, r;
-	StelUtils::rectToSphe(&lng, &lat, &r, XYZ);
-	lng+= 0.50/3600. * M_PI_180;
-	lat+=-0.25/3600. * M_PI_180;
-	StelUtils::spheToRect(lng, lat, r, XYZ);
-	xyz[0]=XYZ.v[0]; xyz[1]=XYZ.v[1]; xyz[2]=XYZ.v[2];
+	apply_lunar_figure_center_correction(xyz);
+}
+
+bool get_lunar_parent_coords_uncached(const double jde,double xyz[3])
+{
+	if(!std::isfinite(jde))
+		return false;
+
+	bool deOk=false;
+	double xyz6[6];
+	if(EphemWrapper::use_de440(jde))
+		deOk=GetDe440Coor(jde, EPHEM_JPL_MOON_ID, xyz6,
+			EPHEM_JPL_EARTH_ID);
+	else if(EphemWrapper::use_de441(jde))
+		deOk=GetDe441Coor(jde, EPHEM_JPL_MOON_ID, xyz6,
+			EPHEM_JPL_EARTH_ID);
+	else if(EphemWrapper::use_de430(jde))
+		deOk=GetDe430Coor(jde, EPHEM_JPL_MOON_ID, xyz6,
+			EPHEM_JPL_EARTH_ID);
+	else if(EphemWrapper::use_de431(jde))
+		deOk=GetDe431Coor(jde, EPHEM_JPL_MOON_ID, xyz6,
+			EPHEM_JPL_EARTH_ID);
+
+	if(deOk)
+	{
+		xyz[0]=xyz6[0]; xyz[1]=xyz6[1]; xyz[2]=xyz6[2];
+	}
+	else
+	{
+		GetElp82bCoorUncached(jde,xyz);
+	}
+	apply_lunar_figure_center_correction(xyz);
+	return std::isfinite(xyz[0]) && std::isfinite(xyz[1]) &&
+		std::isfinite(xyz[2]);
 }
 
 void get_phobos_parent_coordsv(double jd, double xyz[3], double xyzdot[3], void* unused)

@@ -137333,6 +137333,13 @@ void GetVsop87Coor(double jde, int body, double *xyz) {
   GetVsop87OsculatingCoor(jde,jde,body,xyz);
 }
 
+void GetVsop87CoorUncached(const double jde, const int body, double *xyz) {
+  const double t = (jde - 2451545.0) / 365250.0;
+  double elem[VSOP87_DIM];
+  CalcVsop87Elem(t,elem,0);
+  EllipticToRectangularA(vsop87_mu[body],elem+(body*6),0.0,xyz);
+}
+
 void GetVsop87OsculatingCoor(const double jde0, const double jde, const int body, double *xyz) {
   if (jde0 != vsop87_jd0[body]) {
 	const double t0 = (jde0 - 2451545.0) / 365250.0;
