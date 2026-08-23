@@ -597,7 +597,11 @@ IF(GENERATE_STELMAINLIB)
      IF(MSVC)
           # Initial proof of concept for linking third-party plug-ins. A
           # dedicated public API export macro may replace this broad export.
-          SET_TARGET_PROPERTIES(stelMain PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+          # CMake's automatic export scan mistakes an MSVC PCH bookkeeping
+          # symbol for an export, which causes an unresolved-symbol link error.
+          SET_TARGET_PROPERTIES(stelMain PROPERTIES
+               WINDOWS_EXPORT_ALL_SYMBOLS ON
+               DISABLE_PRECOMPILE_HEADERS ON)
      ENDIF()
      TARGET_LINK_LIBRARIES(stelMain PUBLIC ${STELMAIN_DEPS})
      INSTALL(TARGETS stelMain
