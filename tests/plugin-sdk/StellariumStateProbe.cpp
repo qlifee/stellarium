@@ -16,12 +16,14 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaType>
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -31,6 +33,21 @@ constexpr double j2000JulianDay = 2451545.0;
 constexpr double maximumArbitrarySampleSpanDays = 2000.0 * 36525.0;
 constexpr double arbitrarySampleAngularRepeatToleranceDegrees = 1e-3;
 constexpr double arbitrarySampleScalarRepeatTolerance = 1e-5;
+constexpr std::array<double, 4> multiEpochJulianDays{
+	2415020.5, // 1900-01-01 00:00
+	2451545.0, // J2000: 2000-01-01 12:00
+	2460310.5, // 2024-01-01 00:00
+	2469807.5  // 2050-01-01 00:00
+};
+
+struct ArbitraryEpochSamples
+{
+	QVariantMap conjunction;
+	QVariantMap futureConjunction;
+	QVariantMap repeatedConjunction;
+	QVariantMap visibility;
+	QVariantMap repeatedVisibility;
+};
 
 bool hasType(const QVariantMap& state, const QString& key, int typeId)
 {
@@ -97,6 +114,8 @@ void StellariumStateProbe::update(double)
 	QVariantMap coreStateAfterArbitrarySamples;
 	QVariantMap sunStateAfterArbitrarySamples;
 	QVariantMap moonStateAfterArbitrarySamples;
+	std::array<ArbitraryEpochSamples, multiEpochJulianDays.size()>
+		multiEpochSamples;
 
 	if(appInitialized)
 	{
@@ -139,6 +158,26 @@ void StellariumStateProbe::update(double)
 		repeatedVisibilitySample =
 			StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
 				core, currentJulianDayUt);
+		for(std::size_t index = 0; index < multiEpochJulianDays.size(); ++index)
+		{
+			const double julianDay = multiEpochJulianDays[index];
+			ArbitraryEpochSamples& samples = multiEpochSamples[index];
+			samples.conjunction =
+				StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+					core, julianDay);
+			samples.futureConjunction =
+				StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+					core, julianDay + 1.0);
+			samples.visibility =
+				StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+					core, julianDay);
+			samples.repeatedConjunction =
+				StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+					core, julianDay);
+			samples.repeatedVisibility =
+				StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+					core, julianDay);
+		}
 		coreStateAfterArbitrarySamples =
 			StelPluginAPI::getCoreStateSnapshot(core);
 		sunStateAfterArbitrarySamples =
@@ -586,6 +625,130 @@ void StellariumStateProbe::update(double)
 			visibilitySunAzimuth, visibilitySunAltitude,
 			futureVisibilitySunAzimuth,
 			futureVisibilitySunAltitude) > 0.1);
+	bool multiEpochSamplesValid = appInitialized;
+	bool multiEpochSamplesDeterministic = appInitialized;
+	bool multiEpochConjunctionMotionValid = appInitialized;
+	QJsonArray multiEpochResults;
+	for(std::size_t index = 0; index < multiEpochJulianDays.size(); ++index)
+	{
+		const double julianDay = multiEpochJulianDays[index];
+		const ArbitraryEpochSamples& samples = multiEpochSamples[index];
+		const bool conjunctionValid =
+			hasConjunctionSampleTypes(samples.conjunction) &&
+			hasConjunctionSampleTypes(samples.futureConjunction) &&
+			hasConjunctionSampleTypes(samples.repeatedConjunction) &&
+			std::abs(samples.conjunction.value(
+				QStringLiteral("julianDayTt")).toDouble() - julianDay) <= 1e-12 &&
+			std::abs(samples.futureConjunction.value(
+				QStringLiteral("julianDayTt")).toDouble() -
+				(julianDay + 1.0)) <= 1e-12;
+		const double conjunctionDifference = samples.conjunction.value(
+			QStringLiteral(
+				"moonSunGeocentricEclipticLongitudeDifferenceDegrees"))
+			.toDouble();
+		const double futureConjunctionDifference =
+			samples.futureConjunction.value(
+				QStringLiteral(
+					"moonSunGeocentricEclipticLongitudeDifferenceDegrees"))
+				.toDouble();
+		const double conjunctionDailyMotion = std::remainder(
+			futureConjunctionDifference - conjunctionDifference, 360.0);
+		const bool conjunctionValuesValid = conjunctionValid &&
+			std::isfinite(conjunctionDifference) &&
+			conjunctionDifference > -180.0 &&
+			conjunctionDifference <= 180.0 &&
+			std::isfinite(futureConjunctionDifference) &&
+			futureConjunctionDifference > -180.0 &&
+			futureConjunctionDifference <= 180.0;
+		const bool conjunctionDeterministic = conjunctionValid &&
+			std::abs(samples.repeatedConjunction.value(
+				QStringLiteral("julianDayTt")).toDouble() - julianDay) <=
+				1e-12 &&
+			std::abs(samples.repeatedConjunction.value(
+				QStringLiteral(
+					"moonSunGeocentricEclipticLongitudeDifferenceDegrees"))
+				.toDouble() - conjunctionDifference) <=
+				arbitrarySampleAngularRepeatToleranceDegrees;
+		const bool conjunctionMotionValid = conjunctionValuesValid &&
+			conjunctionDailyMotion > 5.0 &&
+			conjunctionDailyMotion < 20.0;
+
+		const bool visibilityValid =
+			visibilityValuesAreValid(samples.visibility, julianDay) &&
+			visibilityValuesAreValid(samples.repeatedVisibility, julianDay);
+		const auto visibilityFieldRepeats =
+			[&samples](const QString& key, double tolerance)
+		{
+			return std::abs(samples.repeatedVisibility.value(key).toDouble() -
+				samples.visibility.value(key).toDouble()) <= tolerance;
+		};
+		const bool visibilityDeterministic = visibilityValid &&
+			visibilityFieldRepeats(QStringLiteral("julianDayUt"), 1e-12) &&
+			visibilityFieldRepeats(QStringLiteral("julianDayTt"), 1e-12) &&
+			visibilityFieldRepeats(QStringLiteral("deltaTSeconds"), 1e-12) &&
+			visibilityFieldRepeats(
+				QStringLiteral("sunAzimuthTopocentricGeometricDegrees"),
+				arbitrarySampleAngularRepeatToleranceDegrees) &&
+			visibilityFieldRepeats(
+				QStringLiteral("sunAltitudeTopocentricGeometricDegrees"),
+				arbitrarySampleAngularRepeatToleranceDegrees) &&
+			visibilityFieldRepeats(
+				QStringLiteral("moonAzimuthTopocentricGeometricDegrees"),
+				arbitrarySampleAngularRepeatToleranceDegrees) &&
+			visibilityFieldRepeats(
+				QStringLiteral("moonAltitudeTopocentricGeometricDegrees"),
+				arbitrarySampleAngularRepeatToleranceDegrees) &&
+			visibilityFieldRepeats(
+				QStringLiteral("moonIlluminatedFraction"),
+				arbitrarySampleScalarRepeatTolerance) &&
+			visibilityFieldRepeats(
+				QStringLiteral(
+					"moonAngularDiameterTopocentricUnscaledDegrees"),
+				arbitrarySampleScalarRepeatTolerance) &&
+			visibilityFieldRepeats(
+				QStringLiteral("moonHorizontalParallaxGeocentricDegrees"),
+				arbitrarySampleScalarRepeatTolerance);
+
+		multiEpochSamplesValid = multiEpochSamplesValid &&
+			conjunctionValuesValid && visibilityValid;
+		multiEpochSamplesDeterministic =
+			multiEpochSamplesDeterministic && conjunctionDeterministic &&
+			visibilityDeterministic;
+		multiEpochConjunctionMotionValid =
+			multiEpochConjunctionMotionValid && conjunctionMotionValid;
+
+		multiEpochResults.append(QJsonObject{
+			{QStringLiteral("julian_day"), julianDay},
+			{QStringLiteral("conjunction_difference_degrees"),
+			 conjunctionDifference},
+			{QStringLiteral("conjunction_daily_motion_degrees"),
+			 conjunctionDailyMotion},
+			{QStringLiteral("delta_t_seconds"),
+			 samples.visibility.value(
+				 QStringLiteral("deltaTSeconds")).toDouble()},
+			{QStringLiteral("sun_azimuth_degrees"),
+			 samples.visibility.value(QStringLiteral(
+				 "sunAzimuthTopocentricGeometricDegrees")).toDouble()},
+			{QStringLiteral("sun_altitude_degrees"),
+			 samples.visibility.value(QStringLiteral(
+				 "sunAltitudeTopocentricGeometricDegrees")).toDouble()},
+			{QStringLiteral("moon_azimuth_degrees"),
+			 samples.visibility.value(QStringLiteral(
+				 "moonAzimuthTopocentricGeometricDegrees")).toDouble()},
+			{QStringLiteral("moon_altitude_degrees"),
+			 samples.visibility.value(QStringLiteral(
+				 "moonAltitudeTopocentricGeometricDegrees")).toDouble()},
+			{QStringLiteral("moon_illuminated_fraction"),
+			 samples.visibility.value(
+				 QStringLiteral("moonIlluminatedFraction")).toDouble()},
+			{QStringLiteral("moon_angular_diameter_degrees"),
+			 samples.visibility.value(QStringLiteral(
+				 "moonAngularDiameterTopocentricUnscaledDegrees")).toDouble()},
+			{QStringLiteral("moon_horizontal_parallax_degrees"),
+			 samples.visibility.value(QStringLiteral(
+				 "moonHorizontalParallaxGeocentricDegrees")).toDouble()}
+		});
+	}
 	const bool arbitrarySamplesPreserveLiveState =
 		coreStateAfterArbitrarySamples == coreState &&
 		sunStateAfterArbitrarySamples == sunState &&
@@ -630,6 +793,8 @@ void StellariumStateProbe::update(double)
 		conjunctionSampleChangesWithTime && visibilitySampleAvailable &&
 		visibilitySampleContractValid && visibilitySampleValuesValid &&
 		visibilitySampleDeterministic && visibilitySampleChangesWithTime &&
+		multiEpochSamplesValid && multiEpochSamplesDeterministic &&
+		multiEpochConjunctionMotionValid &&
 		arbitrarySamplesPreserveLiveState && visibilityCurrentStateParity &&
 		coreStateAvailable && coreStateSchemaMatches &&
 		coreStateTypesMatch && astronomyValuesValid &&
@@ -709,6 +874,15 @@ void StellariumStateProbe::update(double)
 		 visibilitySampleDeterministic},
 		{QStringLiteral("visibility_sample_changes_with_time"),
 		 visibilitySampleChangesWithTime},
+		{QStringLiteral("multi_epoch_samples_valid"),
+		 multiEpochSamplesValid},
+		{QStringLiteral("multi_epoch_samples_deterministic"),
+		 multiEpochSamplesDeterministic},
+		{QStringLiteral("multi_epoch_conjunction_motion_valid"),
+		 multiEpochConjunctionMotionValid},
+		{QStringLiteral("multi_epoch_sample_count"),
+		 static_cast<int>(multiEpochJulianDays.size())},
+		{QStringLiteral("multi_epoch_samples"), multiEpochResults},
 		{QStringLiteral("arbitrary_samples_preserve_live_state"),
 		 arbitrarySamplesPreserveLiveState},
 		{QStringLiteral("visibility_current_state_parity"),

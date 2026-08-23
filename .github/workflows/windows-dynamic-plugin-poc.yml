@@ -1271,6 +1271,9 @@ jobs:
               'visibility_sample_values_valid',
               'visibility_sample_deterministic',
               'visibility_sample_changes_with_time',
+              'multi_epoch_samples_valid',
+              'multi_epoch_samples_deterministic',
+              'multi_epoch_conjunction_motion_valid',
               'arbitrary_samples_preserve_live_state',
               'visibility_current_state_parity',
               'location_valid')) {
@@ -1503,6 +1506,270 @@ jobs:
           }
 
           "Verified: Stellarium discovered StellariumStateProbe, and the external plug-in read validated live application, astronomy-time, location, Sun, Moon, and arbitrary-date Sun-Moon samples through the packaged StelApp/StelPluginAPI facade before exiting cleanly." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Run multi-location arbitrary-date matrix
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP `
+            'stellarium-plugin-matrix-runtime'
+          New-Item -ItemType Directory -Force -Path `
+            $runtimeRoot, $diagnostics | Out-Null
+
+          Copy-Item -Path (Join-Path $installRoot 'bin/*') `
+            -Destination $runtimeRoot -Recurse -Force
+          Copy-Item -Path (Join-Path $installRoot 'qtstuff/*') `
+            -Destination $runtimeRoot -Recurse -Force
+          Copy-Item -Path `
+            (Join-Path $installRoot 'share/stellarium/*') `
+            -Destination $runtimeRoot -Recurse -Force
+          Copy-Item -LiteralPath `
+            (Join-Path $env:GITHUB_WORKSPACE 'data/qt.conf') `
+            -Destination $runtimeRoot -Force
+          Copy-Item -LiteralPath `
+            (Join-Path $env:GITHUB_WORKSPACE `
+              'util/spout2/x64/SpoutLibrary.dll') `
+            -Destination $runtimeRoot -Force
+
+          $app = Join-Path $runtimeRoot 'stellarium.exe'
+          $plugin = Join-Path $env:PLUGIN_BUILD_DIR `
+            'bin/libStellariumStateProbe.dll'
+          $softwareOpenGL = Join-Path $runtimeRoot 'opengl32sw.dll'
+          $locationCases = @(
+            [pscustomobject]@{
+              Id = 'doha'
+              Longitude = 51.5310
+              Latitude = 25.2854
+              Altitude = 10
+            },
+            [pscustomobject]@{
+              Id = 'greenwich'
+              Longitude = 0.0000
+              Latitude = 51.4769
+              Altitude = 46
+            },
+            [pscustomobject]@{
+              Id = 'sydney'
+              Longitude = 151.2093
+              Latitude = -33.8688
+              Altitude = 58
+            }
+          )
+          $states = @{}
+
+          $env:STELLARIUM_DATA_ROOT = $runtimeRoot
+          $env:QT_DEBUG_PLUGINS = '1'
+          $env:QT_PLUGIN_PATH = $runtimeRoot
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path `
+            $runtimeRoot 'platforms'
+          $env:PATH = "$runtimeRoot;$env:PATH"
+
+          foreach ($locationCase in $locationCases) {
+            $userDir = Join-Path $env:RUNNER_TEMP `
+              "stellarium-plugin-matrix-$($locationCase.Id)"
+            $pluginDir = Join-Path $userDir `
+              'modules/StellariumStateProbe'
+            New-Item -ItemType Directory -Force -Path $pluginDir |
+              Out-Null
+            Copy-Item -LiteralPath $plugin -Destination $pluginDir -Force
+
+            $log = Join-Path $userDir 'plugin-integration.log'
+            $sentinel = Join-Path $userDir 'state-probe.json'
+            $standardOutput = Join-Path $userDir 'stellarium-stdout.txt'
+            $standardError = Join-Path $userDir 'stellarium-stderr.txt'
+            $env:STELLARIUM_STATE_PROBE_SENTINEL = $sentinel
+            $longitudeText = $locationCase.Longitude.ToString(
+              [System.Globalization.CultureInfo]::InvariantCulture)
+            $latitudeText = $locationCase.Latitude.ToString(
+              [System.Globalization.CultureInfo]::InvariantCulture)
+            $altitudeText = $locationCase.Altitude.ToString(
+              [System.Globalization.CultureInfo]::InvariantCulture)
+            $appArguments = @(
+              '--user-dir', $userDir,
+              '--log-file', $log,
+              '--full-screen', 'no',
+              '--no-audio',
+              '--low-graphics',
+              '--sky-date', '20240118',
+              '--sky-time', '12:00:00',
+              '--longitude', $longitudeText,
+              '--latitude', $latitudeText,
+              '--altitude', $altitudeText
+            )
+            if (Test-Path -LiteralPath $softwareOpenGL -PathType Leaf) {
+              $appArguments += '--mesa-mode'
+            }
+
+            $process = Start-Process -FilePath $app `
+              -ArgumentList $appArguments `
+              -WorkingDirectory $runtimeRoot `
+              -WindowStyle Hidden `
+              -RedirectStandardOutput $standardOutput `
+              -RedirectStandardError $standardError `
+              -PassThru
+            $completed = $process.WaitForExit(120000)
+            if (-not $completed) {
+              Stop-Process -Id $process.Id -Force `
+                -ErrorAction SilentlyContinue
+              $process.WaitForExit()
+            }
+
+            foreach ($result in @(
+                @{ Source = $log; Suffix = 'integration.log' },
+                @{ Source = $sentinel; Suffix = 'state-probe.json' },
+                @{ Source = $standardOutput; Suffix = 'stdout.txt' },
+                @{ Source = $standardError; Suffix = 'stderr.txt' },
+                @{
+                  Source = (Join-Path $userDir 'config.ini')
+                  Suffix = 'config.ini'
+                }
+              )) {
+              if (Test-Path -LiteralPath $result.Source -PathType Leaf) {
+                $diagnosticName = 'matrix-{0}-{1}' -f `
+                  $locationCase.Id, $result.Suffix
+                Copy-Item -LiteralPath $result.Source `
+                  -Destination (Join-Path $diagnostics $diagnosticName) `
+                  -Force
+              }
+            }
+
+            if (-not $completed) {
+              throw "Stellarium matrix run timed out: $($locationCase.Id)"
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "Stellarium matrix run failed for $($locationCase.Id) with exit code $($process.ExitCode)"
+            }
+            if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) {
+              throw "No state probe result for $($locationCase.Id)"
+            }
+            if (-not (Select-String -LiteralPath $log `
+                -Pattern 'Loaded plugin.*StellariumStateProbe') -or
+                -not (Select-String -LiteralPath $log `
+                -SimpleMatch 'STEL_STATE_PROBE_OK')) {
+              throw "StellariumStateProbe did not load cleanly for $($locationCase.Id)"
+            }
+
+            $state = Get-Content -LiteralPath $sentinel -Raw |
+              ConvertFrom-Json
+            if ($state.status -ne 'ok' -or
+                $state.multi_epoch_sample_count -ne 4 -or
+                -not $state.multi_epoch_samples_valid -or
+                -not $state.multi_epoch_samples_deterministic -or
+                -not $state.multi_epoch_conjunction_motion_valid -or
+                -not $state.arbitrary_samples_preserve_live_state) {
+              throw "Multi-epoch probe failed for $($locationCase.Id): $($state | ConvertTo-Json -Compress)"
+            }
+            if ([Math]::Abs(
+                  [double] $state.longitude_degrees -
+                  $locationCase.Longitude) -gt 1.0e-3 -or
+                [Math]::Abs(
+                  [double] $state.latitude_degrees -
+                  $locationCase.Latitude) -gt 1.0e-3 -or
+                [Math]::Abs(
+                  [double] $state.altitude_meters -
+                  $locationCase.Altitude) -gt 0.5) {
+              throw "Stellarium used the wrong matrix location for $($locationCase.Id)"
+            }
+            $epochs = @($state.multi_epoch_samples)
+            if ($epochs.Count -ne 4) {
+              throw "Expected four matrix epochs for $($locationCase.Id)"
+            }
+            foreach ($epoch in $epochs) {
+              foreach ($field in @(
+                  'julian_day',
+                  'conjunction_difference_degrees',
+                  'conjunction_daily_motion_degrees',
+                  'delta_t_seconds',
+                  'sun_azimuth_degrees',
+                  'sun_altitude_degrees',
+                  'moon_azimuth_degrees',
+                  'moon_altitude_degrees',
+                  'moon_illuminated_fraction',
+                  'moon_angular_diameter_degrees',
+                  'moon_horizontal_parallax_degrees')) {
+                $property = $epoch.PSObject.Properties[$field]
+                if ($null -eq $property) {
+                  throw "Missing matrix field $field for $($locationCase.Id)"
+                }
+                $number = [double] $property.Value
+                if ([double]::IsNaN($number) -or
+                    [double]::IsInfinity($number)) {
+                  throw "Non-finite matrix field $field for $($locationCase.Id)"
+                }
+              }
+            }
+            $states[$locationCase.Id] = $state
+          }
+
+          $baseline = $states['doha']
+          foreach ($locationCase in $locationCases | Select-Object -Skip 1) {
+            $candidate = $states[$locationCase.Id]
+            $locationSensitiveEpochs = 0
+            for ($index = 0; $index -lt 4; $index++) {
+              $referenceEpoch = $baseline.multi_epoch_samples[$index]
+              $candidateEpoch = $candidate.multi_epoch_samples[$index]
+              if ([Math]::Abs(
+                    [double] $candidateEpoch.julian_day -
+                    [double] $referenceEpoch.julian_day) -gt 1.0e-12) {
+                throw "Matrix epochs differ for $($locationCase.Id)"
+              }
+              $conjunctionDifference = [Math]::Abs(
+                [Math]::IEEERemainder(
+                  [double] $candidateEpoch.conjunction_difference_degrees -
+                  [double] $referenceEpoch.conjunction_difference_degrees,
+                  360.0))
+              if ($conjunctionDifference -gt 1.0e-3 -or
+                  [Math]::Abs(
+                    [double] $candidateEpoch.conjunction_daily_motion_degrees -
+                    [double] $referenceEpoch.conjunction_daily_motion_degrees) -gt 1.0e-3 -or
+                  [Math]::Abs(
+                    [double] $candidateEpoch.delta_t_seconds -
+                    [double] $referenceEpoch.delta_t_seconds) -gt 1.0e-7 -or
+                  [Math]::Abs(
+                    [double] $candidateEpoch.moon_illuminated_fraction -
+                    [double] $referenceEpoch.moon_illuminated_fraction) -gt 1.0e-5 -or
+                  [Math]::Abs(
+                    [double] $candidateEpoch.moon_horizontal_parallax_degrees -
+                    [double] $referenceEpoch.moon_horizontal_parallax_degrees) -gt 1.0e-5) {
+                throw "Location-independent matrix values changed for $($locationCase.Id)"
+              }
+              $sunAltitudeDifference = [Math]::Abs(
+                [double] $candidateEpoch.sun_altitude_degrees -
+                [double] $referenceEpoch.sun_altitude_degrees)
+              $moonAltitudeDifference = [Math]::Abs(
+                [double] $candidateEpoch.moon_altitude_degrees -
+                [double] $referenceEpoch.moon_altitude_degrees)
+              if ([Math]::Max(
+                    $sunAltitudeDifference,
+                    $moonAltitudeDifference) -gt 5.0) {
+                $locationSensitiveEpochs++
+              }
+            }
+            if ($locationSensitiveEpochs -lt 3) {
+              throw "Horizon samples were not sufficiently location-sensitive for $($locationCase.Id)"
+            }
+          }
+
+          [ordered]@{
+            status = 'ok'
+            locations = @($locationCases.Id)
+            epoch_count = 4
+            reference_location = 'doha'
+            verified_invariants = @(
+              'geocentric conjunction is location-independent',
+              'Delta-T is location-independent',
+              'lunar illumination and parallax are location-independent',
+              'topocentric horizon coordinates are location-sensitive',
+              'all arbitrary-date calls preserve live host state'
+            )
+          } | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath `
+              (Join-Path $diagnostics 'multi-location-matrix-summary.json') `
+              -Encoding utf8
+
+          "Verified: four fixed epochs spanning 1900-2050 passed at Doha, Greenwich, and Sydney; geocentric quantities remained location-independent, topocentric horizon coordinates changed with location, and live host state was preserved." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Collect build metadata
