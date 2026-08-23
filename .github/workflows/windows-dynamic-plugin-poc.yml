@@ -1704,9 +1704,11 @@ jobs:
           }
 
           $baseline = $states['doha']
+          $comparisonSummaries = @()
           foreach ($locationCase in $locationCases | Select-Object -Skip 1) {
             $candidate = $states[$locationCase.Id]
             $locationSensitiveEpochs = 0
+            $topocentricVisibilitySensitiveEpochs = 0
             for ($index = 0; $index -lt 4; $index++) {
               $referenceEpoch = $baseline.multi_epoch_samples[$index]
               $candidateEpoch = $candidate.multi_epoch_samples[$index]
@@ -1728,9 +1730,6 @@ jobs:
                     [double] $candidateEpoch.delta_t_seconds -
                     [double] $referenceEpoch.delta_t_seconds) -gt 1.0e-7 -or
                   [Math]::Abs(
-                    [double] $candidateEpoch.moon_illuminated_fraction -
-                    [double] $referenceEpoch.moon_illuminated_fraction) -gt 1.0e-5 -or
-                  [Math]::Abs(
                     [double] $candidateEpoch.moon_horizontal_parallax_degrees -
                     [double] $referenceEpoch.moon_horizontal_parallax_degrees) -gt 1.0e-5) {
                 throw "Location-independent matrix values changed for $($locationCase.Id)"
@@ -1746,9 +1745,29 @@ jobs:
                     $moonAltitudeDifference) -gt 5.0) {
                 $locationSensitiveEpochs++
               }
+              $moonIlluminationDifference = [Math]::Abs(
+                [double] $candidateEpoch.moon_illuminated_fraction -
+                [double] $referenceEpoch.moon_illuminated_fraction)
+              $moonAngularDiameterDifference = [Math]::Abs(
+                [double] $candidateEpoch.moon_angular_diameter_degrees -
+                [double] $referenceEpoch.moon_angular_diameter_degrees)
+              if ([Math]::Max(
+                    $moonIlluminationDifference,
+                    $moonAngularDiameterDifference) -gt 1.0e-4) {
+                $topocentricVisibilitySensitiveEpochs++
+              }
             }
             if ($locationSensitiveEpochs -lt 3) {
               throw "Horizon samples were not sufficiently location-sensitive for $($locationCase.Id)"
+            }
+            if ($topocentricVisibilitySensitiveEpochs -lt 3) {
+              throw "Topocentric lunar samples were not sufficiently location-sensitive for $($locationCase.Id)"
+            }
+            $comparisonSummaries += [ordered]@{
+              location = $locationCase.Id
+              horizon_sensitive_epoch_count = $locationSensitiveEpochs
+              topocentric_visibility_sensitive_epoch_count = `
+                $topocentricVisibilitySensitiveEpochs
             }
           }
 
@@ -1757,10 +1776,12 @@ jobs:
             locations = @($locationCases.Id)
             epoch_count = 4
             reference_location = 'doha'
+            comparisons = $comparisonSummaries
             verified_invariants = @(
               'geocentric conjunction is location-independent',
               'Delta-T is location-independent',
-              'lunar illumination and parallax are location-independent',
+              'geocentric lunar horizontal parallax is location-independent',
+              'topocentric lunar illumination and angular diameter are location-sensitive',
               'topocentric horizon coordinates are location-sensitive',
               'all arbitrary-date calls preserve live host state'
             )
@@ -1769,7 +1790,7 @@ jobs:
               (Join-Path $diagnostics 'multi-location-matrix-summary.json') `
               -Encoding utf8
 
-          "Verified: four fixed epochs spanning 1900-2050 passed at Doha, Greenwich, and Sydney; geocentric quantities remained location-independent, topocentric horizon coordinates changed with location, and live host state was preserved." |
+          "Verified: four fixed epochs spanning 1900-2050 passed at Doha, Greenwich, and Sydney; geocentric quantities remained location-independent, topocentric visibility quantities changed with location, and live host state was preserved." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Collect build metadata
