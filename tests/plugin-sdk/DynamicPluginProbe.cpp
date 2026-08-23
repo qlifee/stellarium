@@ -26,6 +26,9 @@ void DynamicPluginProbe::init()
 	const QString moduleVersion = getModuleVersion();
 	qInfo().noquote() << "STEL_DYNAMIC_PLUGIN_PROBE_INITIALIZED"
 	                 << moduleVersion;
+	QTextStream output(stdout);
+	output << "STEL_DYNAMIC_PLUGIN_PROBE_INITIALIZED "
+	       << moduleVersion << Qt::endl;
 
 	const QString sentinelPath =
 		qEnvironmentVariable("STELLARIUM_PLUGIN_PROBE_SENTINEL");

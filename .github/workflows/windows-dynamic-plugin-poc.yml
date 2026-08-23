@@ -337,9 +337,11 @@ jobs:
             'DynamicPluginProbe-loader.txt'
           $loaderOutput = & $loader $plugin 2>&1
           $loaderExitCode = $LASTEXITCODE
-          $loaderOutput | Set-Content -LiteralPath `
-            $loaderOutputPath -Encoding utf8
-          $loaderOutput | Write-Host
+          $loaderText = $loaderOutput | Out-String
+          [System.IO.File]::WriteAllText(
+            $loaderOutputPath,
+            [string] $loaderText)
+          $loaderText | Write-Host
           if ($loaderExitCode -ne 0) {
             throw "External plug-in loader failed with exit code $loaderExitCode"
           }

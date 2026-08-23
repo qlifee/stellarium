@@ -15,6 +15,7 @@
 #include <QDebug>
 #include <QFileInfo>
 #include <QPluginLoader>
+#include <QTextStream>
 
 #include <memory>
 
@@ -87,7 +88,8 @@ int main(int argc, char* argv[])
 	}
 
 	module->init();
-	qInfo().noquote() << "STEL_DYNAMIC_PLUGIN_LOADER_OK"
-	                 << info.id << moduleVersion;
+	QTextStream output(stdout);
+	output << "STEL_DYNAMIC_PLUGIN_LOADER_OK "
+	       << info.id << ' ' << moduleVersion << Qt::endl;
 	return 0;
 }
