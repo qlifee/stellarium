@@ -12,6 +12,7 @@ permissions:
 env:
   BUILD_DIR: build-msvc
   INSTALL_DIR: stellarium-install
+  PLUGIN_BUILD_DIR: dynamic-plugin-probe-build
   DIAG_DIR: diagnostics
   CMAKE_BUILD_PARALLEL_LEVEL: 4
 
@@ -55,7 +56,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DGENERATE_STELMAINLIB=ON `
             -DGENERATE_PACKAGE_TARGET=OFF `
-            -DSTELLARIUM_RELEASE_BUILD=OFF `
+            -DSTELLARIUM_RELEASE_BUILD=ON `
             -DSCM_SHOULD_ENABLE_CONVERTER=OFF `
             -DENABLE_TESTING=ON `
             -DENABLE_NLS=OFF `
@@ -79,6 +80,62 @@ jobs:
             throw "Install failed with exit code $LASTEXITCODE"
           }
 
+      - name: Verify the installed plug-in SDK
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+
+          $sdkFiles = @(
+            'bin/stelMain.dll',
+            'lib/stelMain.lib',
+            'include/stellarium/StelMainExport.hpp',
+            'include/stellarium/core/StelModule.hpp',
+            'include/stellarium/core/StelPluginInterface.hpp',
+            'lib/cmake/Stellarium/StellariumConfig.cmake',
+            'lib/cmake/Stellarium/StellariumConfigVersion.cmake',
+            'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
+          )
+          foreach ($relativePath in $sdkFiles) {
+            $path = Join-Path $installRoot $relativePath
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Installed plug-in SDK file is missing: $path"
+            }
+            if ((Get-Item -LiteralPath $path).Length -eq 0) {
+              throw "Installed plug-in SDK file is empty: $path"
+            }
+          }
+
+          $buildInfoPath = Join-Path $installRoot `
+            'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
+          $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw |
+            ConvertFrom-Json
+          if ($buildInfo.stellarium_version -ne '26.2.0' -or
+              $buildInfo.architecture -ne 'x64' -or
+              $buildInfo.compiler_id -ne 'MSVC' -or
+              $buildInfo.msvc_toolset_version -ne '143' -or
+              $buildInfo.qt_version -ne '6.9.3' -or
+              $buildInfo.build_configuration -ne 'Release' -or
+              $buildInfo.msvc_runtime -ne 'MultiThreadedDLL') {
+            throw "Unexpected plug-in ABI metadata: $($buildInfo | ConvertTo-Json -Compress)"
+          }
+
+          $configPath = Join-Path $installRoot `
+            'lib/cmake/Stellarium/StellariumConfig.cmake'
+          $config = Get-Content -LiteralPath $configPath -Raw
+          foreach ($requiredText in @(
+              'Stellarium::stelMain',
+              'STELMAIN_USE_DLL',
+              'find_dependency(Qt6 6.9.3 EXACT COMPONENTS Core Gui)')) {
+            if (-not $config.Contains($requiredText)) {
+              throw "Installed CMake package is missing: $requiredText"
+            }
+          }
+
+          "Verified: the installed SDK contains only the required public headers, DLL/import library, and version-locked CMake metadata." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
       - name: Verify DLL, import library, and exports
         run: |
           $ErrorActionPreference = 'Stop'
@@ -99,8 +156,21 @@ jobs:
             }
           }
 
-          $dumpbin = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
-          if ($null -eq $dumpbin) {
+          $dumpbin = $null
+          $mainCache = Get-Content -LiteralPath `
+            (Join-Path $env:BUILD_DIR 'CMakeCache.txt') -Raw
+          $linkerMatch = [regex]::Match(
+            $mainCache,
+            '(?m)^CMAKE_LINKER:FILEPATH=(.+?)\r?$')
+          if ($linkerMatch.Success) {
+            $candidate = Join-Path `
+              (Split-Path -Parent $linkerMatch.Groups[1].Value) `
+              'dumpbin.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+              $dumpbin = $candidate
+            }
+          }
+          if (-not $dumpbin) {
             $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
             $dumpbin = & $vswhere -latest -products * `
               -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
@@ -154,6 +224,144 @@ jobs:
           "Verified: stelMain.lib exists for external MSVC consumers." | Add-Content $env:GITHUB_STEP_SUMMARY
           "Verified: required Stellarium symbol families are exported." | Add-Content $env:GITHUB_STEP_SUMMARY
 
+      - name: Build the standalone plug-in from the installed SDK
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixtureSource = Join-Path $env:RUNNER_TEMP `
+            'dynamic-plugin-probe-source'
+          New-Item -ItemType Directory -Force -Path $fixtureSource | Out-Null
+          Copy-Item -Path `
+            (Join-Path $env:GITHUB_WORKSPACE 'tests/plugin-sdk/*') `
+            -Destination $fixtureSource -Recurse -Force
+
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $stellariumDir = Join-Path $installRoot 'lib/cmake/Stellarium'
+          cmake -S $fixtureSource -B $env:PLUGIN_BUILD_DIR `
+            -G 'Visual Studio 17 2022' -A x64 `
+            "-DStellarium_DIR=$stellariumDir" `
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+          if ($LASTEXITCODE -ne 0) {
+            throw "External plug-in configure failed with exit code $LASTEXITCODE"
+          }
+
+          $externalCache = Join-Path $env:PLUGIN_BUILD_DIR 'CMakeCache.txt'
+          $cacheText = (Get-Content -LiteralPath $externalCache -Raw) `
+            -replace '\\', '/'
+          $sourceTreePath = (Join-Path $env:GITHUB_WORKSPACE 'src') `
+            -replace '\\', '/'
+          if ($cacheText.Contains($sourceTreePath)) {
+            throw 'The standalone plug-in leaked a Stellarium source-tree path'
+          }
+
+          cmake --build $env:PLUGIN_BUILD_DIR --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) {
+            throw "External plug-in build failed with exit code $LASTEXITCODE"
+          }
+
+          "Verified: a separate external project configured and built using only the installed Stellarium SDK." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Inspect and load the standalone plug-in
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
+          $probeBin = Join-Path $env:PLUGIN_BUILD_DIR 'bin'
+          $plugin = Join-Path $probeBin 'libDynamicPluginProbe.dll'
+          $loader = Join-Path $probeBin 'DynamicPluginProbeLoader.exe'
+          foreach ($path in @($plugin, $loader)) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "External proof artifact is missing: $path"
+            }
+          }
+
+          $externalCache = Get-Content -LiteralPath `
+            (Join-Path $env:PLUGIN_BUILD_DIR 'CMakeCache.txt') -Raw
+          $linkerMatch = [regex]::Match(
+            $externalCache,
+            '(?m)^CMAKE_LINKER:FILEPATH=(.+?)\r?$')
+          if (-not $linkerMatch.Success) {
+            throw 'Unable to identify the external plug-in linker'
+          }
+          $dumpbin = Join-Path `
+            (Split-Path -Parent $linkerMatch.Groups[1].Value) `
+            'dumpbin.exe'
+          if (-not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) {
+            throw "Unable to locate matching dumpbin.exe: $dumpbin"
+          }
+
+          function Invoke-Dumpbin {
+            param(
+              [string] $OutputPath,
+              [string[]] $Arguments
+            )
+
+            $output = & $dumpbin @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+            $output | Set-Content -LiteralPath $OutputPath -Encoding utf8
+            if ($exitCode -ne 0) {
+              throw "dumpbin failed with exit code $exitCode"
+            }
+          }
+
+          $dependencies = Join-Path $diagnostics `
+            'DynamicPluginProbe-dependencies.txt'
+          $imports = Join-Path $diagnostics 'DynamicPluginProbe-imports.txt'
+          $headers = Join-Path $diagnostics 'DynamicPluginProbe-headers.txt'
+          $exports = Join-Path $diagnostics 'DynamicPluginProbe-exports.txt'
+          Invoke-Dumpbin $dependencies @('/DEPENDENTS', $plugin)
+          Invoke-Dumpbin $imports @('/IMPORTS', $plugin)
+          Invoke-Dumpbin $headers @('/HEADERS', $plugin)
+          Invoke-Dumpbin $exports @('/EXPORTS', $plugin)
+
+          if (-not (Select-String -LiteralPath $dependencies `
+              -Pattern 'stelMain\.dll')) {
+            throw 'The external plug-in does not depend on stelMain.dll'
+          }
+          if (-not (Select-String -LiteralPath $imports `
+              -Pattern 'StelModule')) {
+            throw 'The external plug-in has no imported StelModule symbol'
+          }
+          if (-not (Select-String -LiteralPath $headers `
+              -Pattern 'machine \(x64\)')) {
+            throw 'The external plug-in is not an x64 image'
+          }
+          if (-not (Select-String -LiteralPath $exports `
+              -Pattern 'qt_plugin')) {
+            throw 'The DLL does not export Qt plug-in entry points'
+          }
+
+          $spoutDir = Join-Path $env:GITHUB_WORKSPACE 'util/spout2/x64'
+          $env:PATH = "$(Join-Path $installRoot 'bin');$env:QT_ROOT_DIR\bin;$spoutDir;$env:PATH"
+          $loaderOutputPath = Join-Path $diagnostics `
+            'DynamicPluginProbe-loader.txt'
+          $loaderOutput = & $loader $plugin 2>&1
+          $loaderExitCode = $LASTEXITCODE
+          $loaderOutput | Set-Content -LiteralPath `
+            $loaderOutputPath -Encoding utf8
+          $loaderOutput | Write-Host
+          if ($loaderExitCode -ne 0) {
+            throw "External plug-in loader failed with exit code $loaderExitCode"
+          }
+          foreach ($marker in @(
+              'STEL_DYNAMIC_PLUGIN_PROBE_INITIALIZED',
+              'STEL_DYNAMIC_PLUGIN_LOADER_OK')) {
+            if (-not (Select-String -LiteralPath $loaderOutputPath `
+                -SimpleMatch $marker)) {
+              throw "External plug-in loader did not report $marker"
+            }
+          }
+
+          Get-FileHash -Algorithm SHA256 -LiteralPath $plugin, $loader |
+            Format-Table -AutoSize |
+            Out-String |
+            Set-Content -LiteralPath `
+              (Join-Path $diagnostics 'plugin-proof-sha256.txt') `
+              -Encoding utf8
+
+          "Verified: libDynamicPluginProbe.dll imports stelMain.dll and loads through Qt's plug-in interface." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
       - name: Run DLL-linked smoke test
         run: |
           $spoutDir = Join-Path $env:GITHUB_WORKSPACE 'util/spout2/x64'
@@ -166,6 +374,141 @@ jobs:
             throw "Focused tests failed with exit code $LASTEXITCODE"
           }
 
+      - name: Try full Stellarium plug-in discovery (diagnostic)
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP `
+            'stellarium-plugin-runtime'
+          $userDir = Join-Path $env:RUNNER_TEMP 'stellarium-plugin-user'
+          $pluginDir = Join-Path $userDir `
+            'modules/DynamicPluginProbe'
+          New-Item -ItemType Directory -Force -Path `
+            $runtimeRoot, $pluginDir | Out-Null
+
+          Copy-Item -Path (Join-Path $installRoot 'bin/*') `
+            -Destination $runtimeRoot -Recurse -Force
+          Copy-Item -Path (Join-Path $installRoot 'qtstuff/*') `
+            -Destination $runtimeRoot -Recurse -Force
+          Copy-Item -Path `
+            (Join-Path $installRoot 'share/stellarium/*') `
+            -Destination $runtimeRoot -Recurse -Force
+          Copy-Item -LiteralPath `
+            (Join-Path $env:GITHUB_WORKSPACE 'data/qt.conf') `
+            -Destination $runtimeRoot -Force
+          Copy-Item -LiteralPath `
+            (Join-Path $env:GITHUB_WORKSPACE `
+              'util/spout2/x64/SpoutLibrary.dll') `
+            -Destination $runtimeRoot -Force
+
+          $plugin = Join-Path $env:PLUGIN_BUILD_DIR `
+            'bin/libDynamicPluginProbe.dll'
+          Copy-Item -LiteralPath $plugin -Destination $pluginDir -Force
+
+          $app = Join-Path $runtimeRoot 'stellarium.exe'
+          $log = Join-Path $userDir 'plugin-integration.log'
+          $sentinel = Join-Path $userDir 'plugin-initialized.txt'
+          $standardOutput = Join-Path $userDir 'stellarium-stdout.txt'
+          $standardError = Join-Path $userDir 'stellarium-stderr.txt'
+          $env:STELLARIUM_DATA_ROOT = $runtimeRoot
+          $env:STELLARIUM_PLUGIN_PROBE_SENTINEL = $sentinel
+          $env:QT_DEBUG_PLUGINS = '1'
+          $env:QT_PLUGIN_PATH = $runtimeRoot
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path `
+            $runtimeRoot 'platforms'
+          $env:PATH = "$runtimeRoot;$env:PATH"
+
+          $appArguments = @(
+            '--user-dir', $userDir,
+            '--log-file', $log,
+            '--full-screen', 'no',
+            '--no-audio',
+            '--low-graphics',
+            '--dump-opengl-details'
+          )
+          $softwareOpenGL = Join-Path $runtimeRoot 'opengl32sw.dll'
+          if (Test-Path -LiteralPath $softwareOpenGL -PathType Leaf) {
+            $appArguments += '--mesa-mode'
+            'software OpenGL (--mesa-mode)' |
+              Set-Content -LiteralPath `
+                (Join-Path $diagnostics 'stellarium-graphics-mode.txt') `
+                -Encoding utf8
+          } else {
+            'runner OpenGL (opengl32sw.dll was not deployed)' |
+              Set-Content -LiteralPath `
+                (Join-Path $diagnostics 'stellarium-graphics-mode.txt') `
+                -Encoding utf8
+          }
+
+          $process = Start-Process -FilePath $app `
+            -ArgumentList $appArguments `
+            -WorkingDirectory $runtimeRoot `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $standardOutput `
+            -RedirectStandardError $standardError `
+            -PassThru
+          $completed = $process.WaitForExit(120000)
+          if (-not $completed) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            $process.WaitForExit()
+          }
+
+          foreach ($result in @(
+              @{ Source = $log; Name = 'stellarium-plugin-integration.log' },
+              @{ Source = $sentinel; Name = 'plugin-initialized.txt' },
+              @{
+                Source = $standardOutput
+                Name = 'stellarium-plugin-stdout.txt'
+              },
+              @{
+                Source = $standardError
+                Name = 'stellarium-plugin-stderr.txt'
+              },
+              @{
+                Source = (Join-Path $userDir 'config.ini')
+                Name = 'stellarium-plugin-config.ini'
+              }
+            )) {
+            if (Test-Path -LiteralPath $result.Source -PathType Leaf) {
+              Copy-Item -LiteralPath $result.Source `
+                -Destination (Join-Path $diagnostics $result.Name) -Force
+            }
+          }
+
+          if (-not $completed) {
+            throw 'Stellarium did not exit within 120 seconds'
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Stellarium exited with code $($process.ExitCode)"
+          }
+          if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) {
+            throw 'Stellarium did not initialize DynamicPluginProbe'
+          }
+          $sentinelText = Get-Content -LiteralPath $sentinel -Raw
+          if (-not $sentinelText.Contains('DynamicPluginProbe 26.2.0')) {
+            throw "Unexpected plug-in sentinel: $sentinelText"
+          }
+          if (-not (Test-Path -LiteralPath $log -PathType Leaf)) {
+            throw 'Stellarium did not create the integration log'
+          }
+          if (-not (Select-String -LiteralPath $log `
+              -Pattern 'Loaded plugin.*DynamicPluginProbe')) {
+            throw 'Stellarium did not report loading DynamicPluginProbe'
+          }
+          if (-not (Select-String -LiteralPath $log `
+              -SimpleMatch 'STEL_DYNAMIC_PLUGIN_PROBE_INITIALIZED')) {
+            throw 'Stellarium did not report the plug-in initialization marker'
+          }
+          if (Select-String -LiteralPath $log `
+              -SimpleMatch "Couldn't load the dynamic library") {
+            throw 'Stellarium reported a dynamic-library load failure'
+          }
+
+          "Verified: Stellarium discovered modules/DynamicPluginProbe/libDynamicPluginProbe.dll, initialized it, and exited cleanly." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
       - name: Collect build metadata
         if: always()
         run: |
@@ -176,6 +519,12 @@ jobs:
           if (Test-Path -LiteralPath $cache) {
             Copy-Item -LiteralPath $cache -Destination $diagnostics -Force
           }
+          $externalCache = Join-Path $env:PLUGIN_BUILD_DIR 'CMakeCache.txt'
+          if (Test-Path -LiteralPath $externalCache) {
+            Copy-Item -LiteralPath $externalCache `
+              -Destination (Join-Path $diagnostics `
+                'DynamicPluginProbe-CMakeCache.txt') -Force
+          }
 
           Get-ChildItem -Path $env:BUILD_DIR -Recurse -File `
             -Filter 'windeployqt*' -ErrorAction SilentlyContinue |
@@ -185,7 +534,32 @@ jobs:
             }
 
           $qmake = Get-Command qmake.exe -ErrorAction SilentlyContinue
-          $cl = Get-Command cl.exe -ErrorAction SilentlyContinue
+          $compilerPath = $null
+          $compilerConfig = Get-ChildItem `
+            -Path (Join-Path $env:BUILD_DIR 'CMakeFiles') `
+            -Filter 'CMakeCXXCompiler.cmake' -Recurse -File |
+            Select-Object -First 1
+          if ($compilerConfig) {
+            Copy-Item -LiteralPath $compilerConfig.FullName `
+              -Destination (Join-Path $diagnostics `
+                'CMakeCXXCompiler.cmake') -Force
+            $compilerConfigText = Get-Content -LiteralPath `
+              $compilerConfig.FullName -Raw
+            $compilerMatch = [regex]::Match(
+              $compilerConfigText,
+              'set\(CMAKE_CXX_COMPILER "([^"]+)"\)')
+            if ($compilerMatch.Success) {
+              $compilerPath = $compilerMatch.Groups[1].Value
+            }
+          }
+          $buildInfoPath = Join-Path `
+            (Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR) `
+            'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
+          $buildInfo = if (Test-Path -LiteralPath $buildInfoPath) {
+            Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+          } else {
+            $null
+          }
           $metadata = [ordered]@{
             runner = $env:ImageOS
             architecture = 'x64'
@@ -193,8 +567,17 @@ jobs:
             generator = 'Visual Studio 17 2022'
             qt_root = $env:QT_ROOT_DIR
             qt_version = if ($qmake) { & $qmake.Source -query QT_VERSION } else { $null }
-            compiler_path = if ($cl) { $cl.Source } else { $null }
-            compiler_version = if ($cl) { $cl.FileVersionInfo.ProductVersion } else { $null }
+            compiler_path = $compilerPath
+            compiler_version = if ($buildInfo) {
+              $buildInfo.compiler_version
+            } else {
+              $null
+            }
+            msvc_toolset_version = if ($buildInfo) {
+              $buildInfo.msvc_toolset_version
+            } else {
+              $null
+            }
           }
           $metadata | ConvertTo-Json |
             Set-Content -LiteralPath (Join-Path $diagnostics 'build-metadata.json') -Encoding utf8
