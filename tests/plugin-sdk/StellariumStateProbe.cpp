@@ -21,14 +21,39 @@
 #include <QMetaType>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace
 {
+constexpr double j2000JulianDay = 2451545.0;
+constexpr double maximumArbitrarySampleSpanDays = 2000.0 * 36525.0;
+
 bool hasType(const QVariantMap& state, const QString& key, int typeId)
 {
 	const auto value = state.constFind(key);
 	return value != state.cend() && value->metaType().id() == typeId;
+}
+
+double horizontalSeparationDegrees(double firstAzimuthDegrees,
+	double firstAltitudeDegrees, double secondAzimuthDegrees,
+	double secondAltitudeDegrees)
+{
+	constexpr double degreesToRadians =
+		3.14159265358979323846 / 180.0;
+	const double firstAltitude =
+		firstAltitudeDegrees * degreesToRadians;
+	const double secondAltitude =
+		secondAltitudeDegrees * degreesToRadians;
+	const double azimuthDifference =
+		(firstAzimuthDegrees - secondAzimuthDegrees) * degreesToRadians;
+	const double cosine = std::clamp(
+		std::sin(firstAltitude) * std::sin(secondAltitude) +
+		std::cos(firstAltitude) * std::cos(secondAltitude) *
+			std::cos(azimuthDifference),
+		-1.0, 1.0);
+	return std::acos(cosine) / degreesToRadians;
 }
 }
 
@@ -61,6 +86,15 @@ void StellariumStateProbe::update(double)
 	QVariantMap sunState;
 	QVariantMap moonState;
 	QVariantMap lowerCaseMoonState;
+	QVariantMap conjunctionSample;
+	QVariantMap repeatedConjunctionSample;
+	QVariantMap futureConjunctionSample;
+	QVariantMap visibilitySample;
+	QVariantMap repeatedVisibilitySample;
+	QVariantMap futureVisibilitySample;
+	QVariantMap coreStateAfterArbitrarySamples;
+	QVariantMap sunStateAfterArbitrarySamples;
+	QVariantMap moonStateAfterArbitrarySamples;
 
 	if(appInitialized)
 	{
@@ -72,7 +106,7 @@ void StellariumStateProbe::update(double)
 		solarSystemAvailable = solarSystem != nullptr;
 		solarSystemIdentityMatches = solarSystemAvailable &&
 			solarSystem->objectName() == QStringLiteral("SolarSystem");
-		const StelCore* core = app.getCore();
+		StelCore* core = app.getCore();
 		coreState = StelPluginAPI::getCoreStateSnapshot(core);
 		sunState = StelPluginAPI::getSolarSystemBodyStateSnapshot(
 			core, QStringLiteral("Sun"));
@@ -81,6 +115,36 @@ void StellariumStateProbe::update(double)
 		lowerCaseMoonState =
 			StelPluginAPI::getSolarSystemBodyStateSnapshot(
 				core, QStringLiteral("moon"));
+		const double currentJulianDayUt =
+			coreState.value(QStringLiteral("julianDayUt")).toDouble();
+		const double currentJulianDayTt =
+			coreState.value(QStringLiteral("julianDayTt")).toDouble();
+		conjunctionSample =
+			StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+				core, currentJulianDayTt);
+		futureConjunctionSample =
+			StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+				core, currentJulianDayTt + 1.0);
+		repeatedConjunctionSample =
+			StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+				core, currentJulianDayTt);
+		visibilitySample =
+			StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+				core, currentJulianDayUt);
+		futureVisibilitySample =
+			StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+				core, currentJulianDayUt + 1.0);
+		repeatedVisibilitySample =
+			StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+				core, currentJulianDayUt);
+		coreStateAfterArbitrarySamples =
+			StelPluginAPI::getCoreStateSnapshot(core);
+		sunStateAfterArbitrarySamples =
+			StelPluginAPI::getSolarSystemBodyStateSnapshot(
+				core, QStringLiteral("Sun"));
+		moonStateAfterArbitrarySamples =
+			StelPluginAPI::getSolarSystemBodyStateSnapshot(
+				core, QStringLiteral("Moon"));
 	}
 
 	const bool nullCoreReturnsEmpty =
@@ -95,6 +159,42 @@ void StellariumStateProbe::update(double)
 		StelPluginAPI::getSolarSystemBodyStateSnapshot(
 			StelApp::getInstance().getCore(),
 			QStringLiteral("NotARealSolarSystemBody")).isEmpty();
+	const bool nullConjunctionCoreReturnsEmpty =
+		StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+			nullptr, 2451545.0).isEmpty();
+	const bool invalidConjunctionDatesReturnEmpty = appInitialized &&
+		StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+			StelApp::getInstance().getCore(),
+			std::numeric_limits<double>::quiet_NaN()).isEmpty() &&
+		StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+			StelApp::getInstance().getCore(),
+			std::numeric_limits<double>::infinity()).isEmpty() &&
+		StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+			StelApp::getInstance().getCore(),
+			j2000JulianDay + maximumArbitrarySampleSpanDays + 1.0)
+			.isEmpty() &&
+		StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+			StelApp::getInstance().getCore(),
+			j2000JulianDay - maximumArbitrarySampleSpanDays - 1.0)
+			.isEmpty();
+	const bool nullVisibilityCoreReturnsEmpty =
+		StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+			nullptr, 2451545.0).isEmpty();
+	const bool invalidVisibilityDatesReturnEmpty = appInitialized &&
+		StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+			StelApp::getInstance().getCore(),
+			std::numeric_limits<double>::quiet_NaN()).isEmpty() &&
+		StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+			StelApp::getInstance().getCore(),
+			-std::numeric_limits<double>::infinity()).isEmpty() &&
+		StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+			StelApp::getInstance().getCore(),
+			j2000JulianDay + maximumArbitrarySampleSpanDays + 1.0)
+			.isEmpty() &&
+		StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+			StelApp::getInstance().getCore(),
+			j2000JulianDay - maximumArbitrarySampleSpanDays - 1.0)
+			.isEmpty();
 	const bool coreStateAvailable = !coreState.isEmpty();
 	const bool coreStateSchemaMatches = coreStateAvailable &&
 		coreState.value(QStringLiteral("schemaVersion")).toInt() == 1;
@@ -248,6 +348,213 @@ void StellariumStateProbe::update(double)
 		std::abs(moonIlluminatedFraction -
 		         expectedMoonIlluminatedFraction) <= 1e-5;
 
+	const bool conjunctionSampleAvailable = !conjunctionSample.isEmpty() &&
+		!futureConjunctionSample.isEmpty();
+	const auto hasConjunctionSampleTypes = [](const QVariantMap& sample)
+	{
+		return sample.size() == 3 &&
+			sample.value(QStringLiteral("schemaVersion")).toInt() == 1 &&
+			hasType(sample, QStringLiteral("schemaVersion"),
+			        QMetaType::Int) &&
+			hasType(sample, QStringLiteral("julianDayTt"),
+			        QMetaType::Double) &&
+			hasType(
+				sample,
+				QStringLiteral(
+					"moonSunGeocentricEclipticLongitudeDifferenceDegrees"),
+				QMetaType::Double);
+	};
+	const bool conjunctionSampleContractValid =
+		conjunctionSampleAvailable &&
+		hasConjunctionSampleTypes(conjunctionSample) &&
+		hasConjunctionSampleTypes(repeatedConjunctionSample) &&
+		hasConjunctionSampleTypes(futureConjunctionSample);
+	const double conjunctionDifferenceDegrees = conjunctionSample.value(
+		QStringLiteral(
+			"moonSunGeocentricEclipticLongitudeDifferenceDegrees"))
+		.toDouble();
+	const double futureConjunctionDifferenceDegrees =
+		futureConjunctionSample.value(
+			QStringLiteral(
+				"moonSunGeocentricEclipticLongitudeDifferenceDegrees"))
+		.toDouble();
+	const bool conjunctionSampleValuesValid =
+		conjunctionSampleContractValid &&
+		std::abs(conjunctionSample.value(
+			QStringLiteral("julianDayTt")).toDouble() - julianDayTt) <= 1e-12 &&
+		std::abs(futureConjunctionSample.value(
+			QStringLiteral("julianDayTt")).toDouble() -
+			(julianDayTt + 1.0)) <= 1e-12 &&
+		std::isfinite(conjunctionDifferenceDegrees) &&
+		conjunctionDifferenceDegrees > -180.0 &&
+		conjunctionDifferenceDegrees <= 180.0 &&
+		std::isfinite(futureConjunctionDifferenceDegrees) &&
+		futureConjunctionDifferenceDegrees > -180.0 &&
+		futureConjunctionDifferenceDegrees <= 180.0;
+	const bool conjunctionSampleDeterministic =
+		conjunctionSampleContractValid &&
+		repeatedConjunctionSample == conjunctionSample;
+	const double conjunctionDailyMotionDegrees = std::remainder(
+		futureConjunctionDifferenceDegrees - conjunctionDifferenceDegrees,
+		360.0);
+	const bool conjunctionSampleChangesWithTime =
+		conjunctionSampleValuesValid &&
+		conjunctionDailyMotionDegrees > 5.0 &&
+		conjunctionDailyMotionDegrees < 20.0;
+
+	const auto hasVisibilitySampleTypes = [](const QVariantMap& sample)
+	{
+		return sample.size() == 11 &&
+			hasType(sample, QStringLiteral("schemaVersion"), QMetaType::Int) &&
+			hasType(sample, QStringLiteral("julianDayUt"), QMetaType::Double) &&
+			hasType(sample, QStringLiteral("julianDayTt"), QMetaType::Double) &&
+			hasType(sample, QStringLiteral("deltaTSeconds"), QMetaType::Double) &&
+			hasType(sample,
+			        QStringLiteral("sunAzimuthTopocentricGeometricDegrees"),
+			        QMetaType::Double) &&
+			hasType(sample,
+			        QStringLiteral("sunAltitudeTopocentricGeometricDegrees"),
+			        QMetaType::Double) &&
+			hasType(sample,
+			        QStringLiteral("moonAzimuthTopocentricGeometricDegrees"),
+			        QMetaType::Double) &&
+			hasType(sample,
+			        QStringLiteral("moonAltitudeTopocentricGeometricDegrees"),
+			        QMetaType::Double) &&
+			hasType(sample, QStringLiteral("moonIlluminatedFraction"),
+			        QMetaType::Double) &&
+			hasType(
+				sample,
+				QStringLiteral(
+					"moonAngularDiameterTopocentricUnscaledDegrees"),
+				QMetaType::Double) &&
+			hasType(sample,
+			        QStringLiteral("moonHorizontalParallaxGeocentricDegrees"),
+			        QMetaType::Double);
+	};
+	const auto visibilityValuesAreValid =
+		[&hasVisibilitySampleTypes](const QVariantMap& sample,
+		                            double expectedJulianDayUt)
+	{
+		if(!hasVisibilitySampleTypes(sample))
+			return false;
+		const double julianDayUtValue =
+			sample.value(QStringLiteral("julianDayUt")).toDouble();
+		const double julianDayTtValue =
+			sample.value(QStringLiteral("julianDayTt")).toDouble();
+		const double deltaTValue =
+			sample.value(QStringLiteral("deltaTSeconds")).toDouble();
+		const double sunAzimuth = sample.value(
+			QStringLiteral("sunAzimuthTopocentricGeometricDegrees")).toDouble();
+		const double sunAltitude = sample.value(
+			QStringLiteral("sunAltitudeTopocentricGeometricDegrees")).toDouble();
+		const double moonAzimuth = sample.value(
+			QStringLiteral("moonAzimuthTopocentricGeometricDegrees")).toDouble();
+		const double moonAltitude = sample.value(
+			QStringLiteral("moonAltitudeTopocentricGeometricDegrees")).toDouble();
+		const double illuminatedFraction = sample.value(
+			QStringLiteral("moonIlluminatedFraction")).toDouble();
+		const double angularDiameter = sample.value(
+			QStringLiteral(
+				"moonAngularDiameterTopocentricUnscaledDegrees")).toDouble();
+		const double horizontalParallax = sample.value(
+			QStringLiteral("moonHorizontalParallaxGeocentricDegrees")).toDouble();
+		return std::abs(julianDayUtValue - expectedJulianDayUt) <= 1e-12 &&
+			std::isfinite(julianDayTtValue) &&
+			std::isfinite(deltaTValue) &&
+			std::abs(julianDayTtValue -
+				(julianDayUtValue + deltaTValue / 86400.0)) <= 1e-9 &&
+			std::isfinite(sunAzimuth) &&
+			sunAzimuth >= 0.0 && sunAzimuth < 360.0 &&
+			std::isfinite(sunAltitude) &&
+			sunAltitude >= -90.0 && sunAltitude <= 90.0 &&
+			std::isfinite(moonAzimuth) &&
+			moonAzimuth >= 0.0 && moonAzimuth < 360.0 &&
+			std::isfinite(moonAltitude) &&
+			moonAltitude >= -90.0 && moonAltitude <= 90.0 &&
+			std::isfinite(illuminatedFraction) &&
+			illuminatedFraction >= 0.0 && illuminatedFraction <= 1.0 &&
+			std::isfinite(angularDiameter) &&
+			angularDiameter >= 0.4 && angularDiameter <= 0.7 &&
+			std::isfinite(horizontalParallax) &&
+			horizontalParallax >= 0.7 && horizontalParallax <= 1.2;
+	};
+	const bool visibilitySampleAvailable = !visibilitySample.isEmpty() &&
+		!futureVisibilitySample.isEmpty();
+	const bool visibilitySampleContractValid = visibilitySampleAvailable &&
+		visibilitySample.value(QStringLiteral("schemaVersion")).toInt() == 1 &&
+		hasVisibilitySampleTypes(visibilitySample) &&
+		hasVisibilitySampleTypes(futureVisibilitySample);
+	const double visibilityJulianDayTt =
+		visibilitySample.value(QStringLiteral("julianDayTt")).toDouble();
+	const double visibilityDeltaTSeconds =
+		visibilitySample.value(QStringLiteral("deltaTSeconds")).toDouble();
+	const double visibilitySunAzimuth = visibilitySample.value(
+		QStringLiteral("sunAzimuthTopocentricGeometricDegrees")).toDouble();
+	const double visibilitySunAltitude = visibilitySample.value(
+		QStringLiteral("sunAltitudeTopocentricGeometricDegrees")).toDouble();
+	const double visibilityMoonAzimuth = visibilitySample.value(
+		QStringLiteral("moonAzimuthTopocentricGeometricDegrees")).toDouble();
+	const double visibilityMoonAltitude = visibilitySample.value(
+		QStringLiteral("moonAltitudeTopocentricGeometricDegrees")).toDouble();
+	const double visibilityMoonIlluminatedFraction = visibilitySample.value(
+		QStringLiteral("moonIlluminatedFraction")).toDouble();
+	const double visibilityMoonAngularDiameter = visibilitySample.value(
+		QStringLiteral(
+			"moonAngularDiameterTopocentricUnscaledDegrees")).toDouble();
+	const double visibilityMoonHorizontalParallax = visibilitySample.value(
+		QStringLiteral("moonHorizontalParallaxGeocentricDegrees")).toDouble();
+	const bool visibilitySampleValuesValid = visibilitySampleContractValid &&
+		visibilityValuesAreValid(visibilitySample, julianDayUt) &&
+		visibilityValuesAreValid(repeatedVisibilitySample, julianDayUt) &&
+		visibilityValuesAreValid(futureVisibilitySample, julianDayUt + 1.0) &&
+		std::abs(visibilityDeltaTSeconds - deltaTSeconds) <= 1e-9;
+	const bool visibilitySampleDeterministic =
+		visibilitySampleContractValid &&
+		repeatedVisibilitySample == visibilitySample;
+	const double futureVisibilitySunAzimuth = futureVisibilitySample.value(
+		QStringLiteral("sunAzimuthTopocentricGeometricDegrees")).toDouble();
+	const double futureVisibilitySunAltitude = futureVisibilitySample.value(
+		QStringLiteral("sunAltitudeTopocentricGeometricDegrees")).toDouble();
+	const double futureVisibilityMoonAzimuth = futureVisibilitySample.value(
+		QStringLiteral("moonAzimuthTopocentricGeometricDegrees")).toDouble();
+	const double futureVisibilityMoonAltitude = futureVisibilitySample.value(
+		QStringLiteral("moonAltitudeTopocentricGeometricDegrees")).toDouble();
+	const bool visibilitySampleChangesWithTime =
+		visibilitySampleValuesValid &&
+		(horizontalSeparationDegrees(
+			visibilityMoonAzimuth, visibilityMoonAltitude,
+			futureVisibilityMoonAzimuth,
+			futureVisibilityMoonAltitude) > 0.1 ||
+		 horizontalSeparationDegrees(
+			visibilitySunAzimuth, visibilitySunAltitude,
+			futureVisibilitySunAzimuth,
+			futureVisibilitySunAltitude) > 0.1);
+	const bool arbitrarySamplesPreserveLiveState =
+		coreStateAfterArbitrarySamples == coreState &&
+		sunStateAfterArbitrarySamples == sunState &&
+		moonStateAfterArbitrarySamples == moonState;
+	const bool visibilityCurrentStateParity = visibilitySampleValuesValid &&
+		sunState.value(
+			QStringLiteral("topocentricCoordinatesEnabled")).toBool() &&
+		horizontalSeparationDegrees(
+			visibilitySunAzimuth, visibilitySunAltitude,
+			sunState.value(
+				QStringLiteral("azimuthGeometricDegrees")).toDouble(),
+			sunState.value(
+				QStringLiteral("altitudeGeometricDegrees")).toDouble()) <= 0.02 &&
+		horizontalSeparationDegrees(
+			visibilityMoonAzimuth, visibilityMoonAltitude,
+			moonState.value(
+				QStringLiteral("azimuthGeometricDegrees")).toDouble(),
+			moonState.value(
+				QStringLiteral("altitudeGeometricDegrees")).toDouble()) <= 0.02 &&
+		std::abs(visibilityMoonIlluminatedFraction -
+			moonIlluminatedFraction) <= 0.001 &&
+		std::abs(visibilityMoonAngularDiameter -
+			moonState.value(
+				QStringLiteral("angularDiameterUnscaledDegrees")).toDouble()) <= 0.001;
+
 	const bool success = versionMatches && appInitialized &&
 		selfRegistered && solarSystemAvailable &&
 		solarSystemIdentityMatches && nullCoreReturnsEmpty &&
@@ -258,7 +565,16 @@ void StellariumStateProbe::update(double)
 		bodyLookupCaseInsensitive && bodyStateTimesMatch &&
 		bodyPositionValuesMatch && sunPhaseUnavailable &&
 		moonPhaseAvailable && moonPhaseValuesValid &&
-		moonPhaseRelationValid &&
+		moonPhaseRelationValid && nullConjunctionCoreReturnsEmpty &&
+		invalidConjunctionDatesReturnEmpty &&
+		nullVisibilityCoreReturnsEmpty &&
+		invalidVisibilityDatesReturnEmpty &&
+		conjunctionSampleAvailable && conjunctionSampleContractValid &&
+		conjunctionSampleValuesValid && conjunctionSampleDeterministic &&
+		conjunctionSampleChangesWithTime && visibilitySampleAvailable &&
+		visibilitySampleContractValid && visibilitySampleValuesValid &&
+		visibilitySampleDeterministic && visibilitySampleChangesWithTime &&
+		arbitrarySamplesPreserveLiveState && visibilityCurrentStateParity &&
 		coreStateAvailable && coreStateSchemaMatches &&
 		coreStateTypesMatch && astronomyValuesValid &&
 		ephemerisRelationValid && locationValuesValid;
@@ -284,6 +600,14 @@ void StellariumStateProbe::update(double)
 		 emptyBodyIdReturnsEmpty},
 		{QStringLiteral("unknown_body_returns_empty"),
 		 unknownBodyReturnsEmpty},
+		{QStringLiteral("null_conjunction_core_returns_empty"),
+		 nullConjunctionCoreReturnsEmpty},
+		{QStringLiteral("invalid_conjunction_dates_return_empty"),
+		 invalidConjunctionDatesReturnEmpty},
+		{QStringLiteral("null_visibility_core_returns_empty"),
+		 nullVisibilityCoreReturnsEmpty},
+		{QStringLiteral("invalid_visibility_dates_return_empty"),
+		 invalidVisibilityDatesReturnEmpty},
 		{QStringLiteral("core_state_available"), coreStateAvailable},
 		{QStringLiteral("core_state_schema_matches"),
 		 coreStateSchemaMatches},
@@ -309,6 +633,30 @@ void StellariumStateProbe::update(double)
 		 moonPhaseValuesValid},
 		{QStringLiteral("moon_phase_relation_valid"),
 		 moonPhaseRelationValid},
+		{QStringLiteral("conjunction_sample_available"),
+		 conjunctionSampleAvailable},
+		{QStringLiteral("conjunction_sample_contract_valid"),
+		 conjunctionSampleContractValid},
+		{QStringLiteral("conjunction_sample_values_valid"),
+		 conjunctionSampleValuesValid},
+		{QStringLiteral("conjunction_sample_deterministic"),
+		 conjunctionSampleDeterministic},
+		{QStringLiteral("conjunction_sample_changes_with_time"),
+		 conjunctionSampleChangesWithTime},
+		{QStringLiteral("visibility_sample_available"),
+		 visibilitySampleAvailable},
+		{QStringLiteral("visibility_sample_contract_valid"),
+		 visibilitySampleContractValid},
+		{QStringLiteral("visibility_sample_values_valid"),
+		 visibilitySampleValuesValid},
+		{QStringLiteral("visibility_sample_deterministic"),
+		 visibilitySampleDeterministic},
+		{QStringLiteral("visibility_sample_changes_with_time"),
+		 visibilitySampleChangesWithTime},
+		{QStringLiteral("arbitrary_samples_preserve_live_state"),
+		 arbitrarySamplesPreserveLiveState},
+		{QStringLiteral("visibility_current_state_parity"),
+		 visibilityCurrentStateParity},
 		{QStringLiteral("julian_day_ut"), julianDayUt},
 		{QStringLiteral("julian_day_tt"), julianDayTt},
 		{QStringLiteral("delta_t_seconds"), deltaTSeconds},
@@ -377,7 +725,31 @@ void StellariumStateProbe::update(double)
 		{QStringLiteral("moon_phase_angle_degrees"),
 		 moonPhaseAngleDegrees},
 		{QStringLiteral("moon_elongation_degrees"),
-		 moonElongationDegrees}
+		 moonElongationDegrees},
+		{QStringLiteral("conjunction_longitude_difference_degrees"),
+		 conjunctionDifferenceDegrees},
+		{QStringLiteral("future_conjunction_longitude_difference_degrees"),
+		 futureConjunctionDifferenceDegrees},
+		{QStringLiteral("conjunction_daily_motion_degrees"),
+		 conjunctionDailyMotionDegrees},
+		{QStringLiteral("visibility_julian_day_tt"),
+		 visibilityJulianDayTt},
+		{QStringLiteral("visibility_delta_t_seconds"),
+		 visibilityDeltaTSeconds},
+		{QStringLiteral("visibility_sun_azimuth_degrees"),
+		 visibilitySunAzimuth},
+		{QStringLiteral("visibility_sun_altitude_degrees"),
+		 visibilitySunAltitude},
+		{QStringLiteral("visibility_moon_azimuth_degrees"),
+		 visibilityMoonAzimuth},
+		{QStringLiteral("visibility_moon_altitude_degrees"),
+		 visibilityMoonAltitude},
+		{QStringLiteral("visibility_moon_illuminated_fraction"),
+		 visibilityMoonIlluminatedFraction},
+		{QStringLiteral("visibility_moon_angular_diameter_degrees"),
+		 visibilityMoonAngularDiameter},
+		{QStringLiteral("visibility_moon_horizontal_parallax_degrees"),
+		 visibilityMoonHorizontalParallax}
 	};
 
 	const QString sentinelPath =

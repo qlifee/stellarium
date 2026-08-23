@@ -191,7 +191,8 @@ jobs:
       - name: Build
         run: |
           cmake --build $env:BUILD_DIR --config Release --parallel 4 `
-            --target fake-show-my-sky-client stellarium testDates testStelFileMgr
+            --target fake-show-my-sky-client stellarium testDates `
+              testStelFileMgr testPrecession
           if ($LASTEXITCODE -ne 0) {
             throw "Build failed with exit code $LASTEXITCODE"
           }
@@ -530,17 +531,95 @@ jobs:
               }
             }
           }
+
+          $conjunctionSample = $buildInfo.moon_sun_conjunction_sample
+          $visibilitySample = $buildInfo.sun_moon_visibility_sample
+          if ($null -eq $conjunctionSample -or
+              $conjunctionSample.operation -cne `
+                'StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(const StelCore*, double)' -or
+              $conjunctionSample.return_type -cne 'QVariantMap' -or
+              $null -eq $visibilitySample -or
+              $visibilitySample.operation -cne `
+                'StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(const StelCore*, double)' -or
+              $visibilitySample.return_type -cne 'QVariantMap') {
+            throw 'The packaged SDK omits the arbitrary-date sample operations'
+          }
+          foreach ($contract in @(
+              $conjunctionSample.time_scale_contract,
+              $conjunctionSample.coordinate_contract,
+              $conjunctionSample.accuracy_contract,
+              $conjunctionSample.empty_result_behavior,
+              $conjunctionSample.pointer_contract,
+              $conjunctionSample.thread_contract,
+              $conjunctionSample.state_contract,
+              $conjunctionSample.abi_contract,
+              $visibilitySample.time_scale_contract,
+              $visibilitySample.coordinate_contract,
+              $visibilitySample.accuracy_contract,
+              $visibilitySample.empty_result_behavior,
+              $visibilitySample.pointer_contract,
+              $visibilitySample.thread_contract,
+              $visibilitySample.state_contract,
+              $visibilitySample.abi_contract)) {
+            if ([string]::IsNullOrWhiteSpace([string]$contract)) {
+              throw 'The packaged SDK has an empty arbitrary-date contract'
+            }
+          }
+          $expectedConjunctionFields = [ordered]@{
+            schemaVersion = 'int'
+            julianDayTt = 'double'
+            moonSunGeocentricEclipticLongitudeDifferenceDegrees = 'double'
+          }
+          $expectedVisibilityFields = [ordered]@{
+            schemaVersion = 'int'
+            julianDayUt = 'double'
+            julianDayTt = 'double'
+            deltaTSeconds = 'double'
+            sunAzimuthTopocentricGeometricDegrees = 'double'
+            sunAltitudeTopocentricGeometricDegrees = 'double'
+            moonAzimuthTopocentricGeometricDegrees = 'double'
+            moonAltitudeTopocentricGeometricDegrees = 'double'
+            moonIlluminatedFraction = 'double'
+            moonAngularDiameterTopocentricUnscaledDegrees = 'double'
+            moonHorizontalParallaxGeocentricDegrees = 'double'
+          }
+          foreach ($fieldSet in @(
+              [pscustomobject]@{
+                Actual = $conjunctionSample.fields
+                Expected = $expectedConjunctionFields
+                Label = 'conjunction sample'
+              },
+              [pscustomobject]@{
+                Actual = $visibilitySample.fields
+                Expected = $expectedVisibilityFields
+                Label = 'visibility sample'
+              })) {
+            $actualNames = @($fieldSet.Actual.PSObject.Properties.Name)
+            if (($actualNames -join "`n") -cne `
+                (@($fieldSet.Expected.Keys) -join "`n")) {
+              throw "The packaged SDK describes unexpected $($fieldSet.Label) fields"
+            }
+            foreach ($field in $fieldSet.Expected.Keys) {
+              if ($fieldSet.Actual.$field -cne $fieldSet.Expected[$field]) {
+                throw "The packaged SDK has the wrong type for $($fieldSet.Label) field $field"
+              }
+            }
+          }
           foreach ($operation in @(
-              'StelApp::getCore() as an opaque snapshot input',
+              'StelApp::getCore() as an opaque facade input',
               'StelPluginAPI::getCoreStateSnapshot(const StelCore*)',
-              'StelPluginAPI::getSolarSystemBodyStateSnapshot(const StelCore*, const QString&)')) {
+              'StelPluginAPI::getSolarSystemBodyStateSnapshot(const StelCore*, const QString&)',
+              'StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(const StelCore*, double)',
+              'StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(const StelCore*, double)')) {
             if (@($buildInfo.validated_operations) -cnotcontains $operation) {
               throw "The packaged SDK omits validated operation $operation"
             }
           }
           foreach ($capability in @(
               'read-only current core time and location snapshot',
-              'read-only current Solar System body state snapshot')) {
+              'read-only current Solar System body state snapshot',
+              'read-only arbitrary-TT Moon-Sun conjunction sample',
+              'read-only arbitrary-UT Sun-Moon visibility sample')) {
             if (@($buildInfo.validated_capabilities) -cnotcontains `
                 $capability) {
               throw "The packaged SDK omits capability $capability"
@@ -577,7 +656,7 @@ jobs:
           "archive=$archive" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
           "checksum=$archiveChecksum" |
             Add-Content -LiteralPath $env:GITHUB_OUTPUT
-          "Verified: the exact SDK ZIP is self-described, checksummed, relocatable, and contains the expected minimal API including the read-only core and Solar System body-state facades." |
+          "Verified: the exact SDK ZIP is self-described, checksummed, relocatable, and contains the expected minimal read-only current-state and arbitrary-date facades." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Install
@@ -688,7 +767,7 @@ jobs:
             }
           }
 
-          "Verified: the installed SDK contains the required public headers, read-only core and Solar System body-state facades, DLL/import library, and version-locked CMake metadata." |
+          "Verified: the installed SDK contains the required public headers, read-only current-state and arbitrary-date facades, DLL/import library, and version-locked CMake metadata." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Verify DLL, import library, and exports
@@ -775,7 +854,9 @@ jobs:
               'getModule@StelApp',
               'getCore@StelApp',
               'getCoreStateSnapshot@StelPluginAPI',
-              'getSolarSystemBodyStateSnapshot@StelPluginAPI')) {
+              'getSolarSystemBodyStateSnapshot@StelPluginAPI',
+              'getMoonSunConjunctionSampleAtJulianDayTt@StelPluginAPI',
+              'getSunMoonVisibilitySampleAtJulianDayUt@StelPluginAPI')) {
             if (-not (Select-String -LiteralPath $dllExports `
                 -SimpleMatch $apiSymbol) -or
                 -not (Select-String -LiteralPath $importMembers `
@@ -791,7 +872,7 @@ jobs:
 
           "Verified: stellarium.exe loads stelMain.dll." | Add-Content $env:GITHUB_STEP_SUMMARY
           "Verified: stelMain.lib exists for external MSVC consumers." | Add-Content $env:GITHUB_STEP_SUMMARY
-          "Verified: required Stellarium symbol families and the read-only core and Solar System body-state facades are exported." |
+          "Verified: required Stellarium symbol families and all validated read-only facade operations are exported." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Build the standalone plug-in from the packaged SDK
@@ -947,7 +1028,9 @@ jobs:
                   'getModule@StelApp',
                   'getCore@StelApp',
                   'getCoreStateSnapshot@StelPluginAPI',
-                  'getSolarSystemBodyStateSnapshot@StelPluginAPI')) {
+                  'getSolarSystemBodyStateSnapshot@StelPluginAPI',
+                  'getMoonSunConjunctionSampleAtJulianDayTt@StelPluginAPI',
+                  'getSunMoonVisibilitySampleAtJulianDayUt@StelPluginAPI')) {
                 if (-not (Select-String -LiteralPath $imports `
                     -SimpleMatch $apiSymbol)) {
                   throw "StellariumStateProbe does not import $apiSymbol"
@@ -1009,7 +1092,7 @@ jobs:
               (Join-Path $diagnostics 'plugin-proof-sha256.txt') `
               -Encoding utf8
 
-          "Verified: both external plug-ins import stelMain.dll and load through Qt's plug-in interface; StellariumStateProbe uses only the tested StelApp and StelPluginAPI facade symbols for live core and Solar System body state." |
+          "Verified: both external plug-ins import stelMain.dll and load through Qt's plug-in interface; StellariumStateProbe uses only the tested StelApp and StelPluginAPI current-state and arbitrary-date facade symbols." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Run DLL-linked smoke test
@@ -1019,7 +1102,7 @@ jobs:
           ctest --test-dir $env:BUILD_DIR `
             -C Release `
             --output-on-failure `
-            -R '^(testDates|testStelFileMgr)$'
+            -R '^(testDates|testStelFileMgr|testPrecession)$'
           if ($LASTEXITCODE -ne 0) {
             throw "Focused tests failed with exit code $LASTEXITCODE"
           }
@@ -1162,6 +1245,10 @@ jobs:
               'null_body_core_returns_empty',
               'empty_body_id_returns_empty',
               'unknown_body_returns_empty',
+              'null_conjunction_core_returns_empty',
+              'invalid_conjunction_dates_return_empty',
+              'null_visibility_core_returns_empty',
+              'invalid_visibility_dates_return_empty',
               'sun_state_available',
               'moon_state_available',
               'body_state_schema_matches',
@@ -1174,6 +1261,18 @@ jobs:
               'moon_phase_available',
               'moon_phase_values_valid',
               'moon_phase_relation_valid',
+              'conjunction_sample_available',
+              'conjunction_sample_contract_valid',
+              'conjunction_sample_values_valid',
+              'conjunction_sample_deterministic',
+              'conjunction_sample_changes_with_time',
+              'visibility_sample_available',
+              'visibility_sample_contract_valid',
+              'visibility_sample_values_valid',
+              'visibility_sample_deterministic',
+              'visibility_sample_changes_with_time',
+              'arbitrary_samples_preserve_live_state',
+              'visibility_current_state_parity',
               'location_valid')) {
             $property = $state.PSObject.Properties[$field]
             if ($null -eq $property -or
@@ -1281,6 +1380,30 @@ jobs:
             'moon_phase_angle_degrees'
           $moonElongation = Get-FiniteStateNumber `
             'moon_elongation_degrees'
+          $conjunctionDifference = Get-FiniteStateNumber `
+            'conjunction_longitude_difference_degrees'
+          $futureConjunctionDifference = Get-FiniteStateNumber `
+            'future_conjunction_longitude_difference_degrees'
+          $conjunctionDailyMotion = Get-FiniteStateNumber `
+            'conjunction_daily_motion_degrees'
+          $visibilityJulianDayTt = Get-FiniteStateNumber `
+            'visibility_julian_day_tt'
+          $visibilityDeltaT = Get-FiniteStateNumber `
+            'visibility_delta_t_seconds'
+          $visibilitySunAz = Get-FiniteStateNumber `
+            'visibility_sun_azimuth_degrees'
+          $visibilitySunAlt = Get-FiniteStateNumber `
+            'visibility_sun_altitude_degrees'
+          $visibilityMoonAz = Get-FiniteStateNumber `
+            'visibility_moon_azimuth_degrees'
+          $visibilityMoonAlt = Get-FiniteStateNumber `
+            'visibility_moon_altitude_degrees'
+          $visibilityMoonFraction = Get-FiniteStateNumber `
+            'visibility_moon_illuminated_fraction'
+          $visibilityMoonDiameter = Get-FiniteStateNumber `
+            'visibility_moon_angular_diameter_degrees'
+          $visibilityMoonParallax = Get-FiniteStateNumber `
+            'visibility_moon_horizontal_parallax_degrees'
 
           if ($julianDayUt -le 0.0 -or $julianDayUt -gt 100000000.0 -or
               $julianDayTt -le 0.0 -or $julianDayTt -gt 100000000.0 -or
@@ -1311,6 +1434,34 @@ jobs:
               $moonElongation -gt 180.0) {
             throw "Body-state probe values are outside defined ranges: $($state | ConvertTo-Json -Compress)"
           }
+          if ($conjunctionDifference -le -180.0 -or
+              $conjunctionDifference -gt 180.0 -or
+              $futureConjunctionDifference -le -180.0 -or
+              $futureConjunctionDifference -gt 180.0 -or
+              $visibilityJulianDayTt -le 0.0 -or
+              [Math]::Abs($visibilityDeltaT) -gt 86400.0 -or
+              $visibilitySunAz -lt 0.0 -or $visibilitySunAz -ge 360.0 -or
+              $visibilityMoonAz -lt 0.0 -or $visibilityMoonAz -ge 360.0 -or
+              $visibilitySunAlt -lt -90.0 -or $visibilitySunAlt -gt 90.0 -or
+              $visibilityMoonAlt -lt -90.0 -or $visibilityMoonAlt -gt 90.0 -or
+              $visibilityMoonFraction -lt 0.0 -or
+              $visibilityMoonFraction -gt 1.0 -or
+              $visibilityMoonDiameter -lt 0.4 -or
+              $visibilityMoonDiameter -gt 0.7 -or
+              $visibilityMoonParallax -lt 0.7 -or
+              $visibilityMoonParallax -gt 1.2) {
+            throw "Arbitrary-date sample values are outside defined ranges: $($state | ConvertTo-Json -Compress)"
+          }
+          $expectedConjunctionDailyMotion = [Math]::IEEERemainder(
+            $futureConjunctionDifference - $conjunctionDifference,
+            360.0)
+          if ([Math]::Abs(
+                $conjunctionDailyMotion -
+                $expectedConjunctionDailyMotion) -gt 1.0e-12 -or
+              $conjunctionDailyMotion -le 5.0 -or
+              $conjunctionDailyMotion -ge 20.0) {
+            throw "Moon-minus-Sun longitude did not advance eastward by a plausible amount: $conjunctionDailyMotion degrees"
+          }
           $expectedMoonIlluminatedFraction = 0.5 * (
             1.0 + [Math]::Cos(
               $moonPhaseAngle * [Math]::PI / 180.0))
@@ -1322,6 +1473,14 @@ jobs:
           $expectedJulianDayTt = $julianDayUt + $deltaTSeconds / 86400.0
           if ([Math]::Abs($julianDayTt - $expectedJulianDayTt) -gt 1.0e-8) {
             throw 'State probe JD/JDE/Delta-T relation is inconsistent'
+          }
+          $expectedVisibilityJulianDayTt = `
+            $julianDayUt + $visibilityDeltaT / 86400.0
+          if ([Math]::Abs(
+                $visibilityJulianDayTt -
+                $expectedVisibilityJulianDayTt) -gt 1.0e-8 -or
+              [Math]::Abs($visibilityDeltaT - $deltaTSeconds) -gt 1.0e-8) {
+            throw 'Visibility sample UT/TT/Delta-T relation is inconsistent'
           }
           if (-not (Test-Path -LiteralPath $log -PathType Leaf)) {
             throw 'Stellarium did not create the integration log'
@@ -1343,7 +1502,7 @@ jobs:
             throw 'Stellarium reported a dynamic-library load failure'
           }
 
-          "Verified: Stellarium discovered StellariumStateProbe, and the external plug-in read validated live application, astronomy-time, location, Sun, and Moon state through the packaged StelApp/StelPluginAPI facade before exiting cleanly." |
+          "Verified: Stellarium discovered StellariumStateProbe, and the external plug-in read validated live application, astronomy-time, location, Sun, Moon, and arbitrary-date Sun-Moon samples through the packaged StelApp/StelPluginAPI facade before exiting cleanly." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Collect build metadata

@@ -77,6 +77,67 @@ STELMAIN_EXPORT QVariantMap getCoreStateSnapshot(const StelCore* core);
 //! unknown body ID, or unavailable/non-finite base position data.
 STELMAIN_EXPORT QVariantMap getSolarSystemBodyStateSnapshot(
 	const StelCore* core, const QString& bodyId);
+
+//! Sample the signed geocentric Moon-Sun longitude difference at a TT date.
+//!
+//! This deliberately small query supports arbitrary-date conjunction searches
+//! without exposing Planet objects or changing the running simulation. @p
+//! julianDayTt is a Julian Day in TT (Stellarium's JDE time scale), not UT or a
+//! local civil date, and must be within 200,000 Julian years of J2000. A
+//! successful result contains exactly:
+//! - `schemaVersion` (`int`, currently 1)
+//! - `julianDayTt` (`double`)
+//! - `moonSunGeocentricEclipticLongitudeDifferenceDegrees` (`double`)
+//!
+//! The longitude difference is Moon minus Sun in Stellarium's geometric
+//! VSOP87/J2000 ecliptic frame, normalized to (-180, 180] degrees. It is
+//! Earth-centred and does not include topocentric parallax, refraction,
+//! aberration, or light-time correction. Call this only on Stellarium's main
+//! thread after Solar System initialization. The call does not change the
+//! host clock, location, live body positions, or Planet orbit cache.
+//! The accepted date span is a numerical safety boundary, not a uniform
+//! accuracy guarantee; accuracy depends on the host ephemeris models.
+//!
+//! @return an empty map for a null/foreign core, non-finite or out-of-range
+//! date, unavailable bodies, a non-main-thread call, or invalid output.
+STELMAIN_EXPORT QVariantMap getMoonSunConjunctionSampleAtJulianDayTt(
+	const StelCore* core, double julianDayTt);
+
+//! Sample geometric Sun-Moon visibility data at an arbitrary UT date.
+//!
+//! @p julianDayUt is Stellarium's UT-like Julian Day, not local civil time, and
+//! must be within 200,000 Julian years of J2000; the derived TT date must be in
+//! the same range. It is used as UT1 for sidereal rotation, without a separate
+//! DUT1 correction. Stellarium's configured Delta-T model supplies TT. The
+//! observer is the current stationary Earth location. Topocentric parallax and
+//! Stellarium's physical Earth nutation model are applied independently of the
+//! host's display toggles. The nutation result fades to zero outside that
+//! model's configured date range. Atmosphere, refraction, aberration, and
+//! light-time correction are not applied. Azimuth is normalized to [0, 360)
+//! degrees with north at 0 and east at 90.
+//!
+//! A successful result contains exactly:
+//! - `schemaVersion` (`int`, currently 1)
+//! - `julianDayUt`, `julianDayTt`, and `deltaTSeconds` (`double`)
+//! - `sunAzimuthTopocentricGeometricDegrees` and
+//!   `sunAltitudeTopocentricGeometricDegrees` (`double`)
+//! - `moonAzimuthTopocentricGeometricDegrees` and
+//!   `moonAltitudeTopocentricGeometricDegrees` (`double`)
+//! - `moonIlluminatedFraction` (`double`, in [0, 1])
+//! - `moonAngularDiameterTopocentricUnscaledDegrees` (`double`)
+//! - `moonHorizontalParallaxGeocentricDegrees` (`double`)
+//!
+//! This function computes into local values and does not change the host
+//! clock, time rate, location, live Solar System state, or Planet orbit cache.
+//! Call it only on Stellarium's main thread after Solar System initialization.
+//! The accepted date span is a numerical safety boundary, not a uniform
+//! accuracy guarantee for the host Delta-T, nutation, or ephemeris models.
+//!
+//! @return an empty map for a null/foreign core, non-finite or out-of-range
+//! date, unsupported or moving observer, unavailable bodies, a non-main-thread
+//! call, or invalid output.
+STELMAIN_EXPORT QVariantMap getSunMoonVisibilitySampleAtJulianDayUt(
+	const StelCore* core, double julianDayUt);
 }
 
 #endif // STELPLUGINAPI_HPP

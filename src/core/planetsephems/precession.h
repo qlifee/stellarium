@@ -42,6 +42,12 @@ extern "C" {
 //! Return values are in radians
 void getPrecessionAnglesVondrak(const double jde, double *epsilon_A, double *chi_A, double *omega_A, double *psi_A);
 
+//! Compute Vondrak precession angles without reading or changing the shared
+//! one-day result cache used by getPrecessionAnglesVondrak(). This is intended
+//! for isolated arbitrary-epoch calculations which must not perturb the live
+//! simulation's cache anchor. Return values are in radians.
+void getPrecessionAnglesVondrakUncached(const double jde, double *epsilon_A, double *chi_A, double *omega_A, double *psi_A);
+
 //! Alternative solution, the one also implemented in the paper,
 //! combining matrix P from P_A, Q_A, X_A, Y_A and, for the ecliptic of date, rotate back by epsilon_A.
 //! Return values are in radians.
@@ -67,6 +73,11 @@ double getPrecessionAngleVondrakCurrentEpsilonA(void);
 //! This model provides accuracy better than 1 milli-arcsecond in the time 1995-2050.
 //! TODO: find out drift rate behaviour e.g. in 17./18. century, maybe use nutation only e.g. 1610-2200?
 void getNutationAngles(const double JDE, double *deltaPsi, double *deltaEpsilon);
+
+//! Compute IAU-2000B nutation without reading or changing the shared hourly
+//! result cache used by getNutationAngles(). This is intended for isolated
+//! arbitrary-epoch calculations. Return values are in radians.
+void getNutationAnglesUncached(const double JDE, double *deltaPsi, double *deltaEpsilon);
 
 #ifdef __cplusplus
 }

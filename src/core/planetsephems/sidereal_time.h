@@ -30,6 +30,10 @@ double get_mean_sidereal_time (double JD, double JDE);
 
 /* Calculate apparent sidereal time (degrees) from date. We need JD(UT) and JDE(TT) here to accurately compute nutation. */
 double get_apparent_sidereal_time (double JD, double JDE);
+
+/* Calculate apparent sidereal time without reading or changing the shared
+ * precession and nutation approximation caches. */
+double get_apparent_sidereal_time_uncached (double JD, double JDE);
 /* Calculate mean ecliptical obliquity in degrees. */
 // double get_mean_ecliptical_obliquity(double JDE);
 /* Calculate nutation in longitude in degrees. */

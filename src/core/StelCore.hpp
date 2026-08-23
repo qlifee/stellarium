@@ -391,6 +391,10 @@ public:
 	//! Dialog closing or moving, zooming, moving view etc.
 	void setClearSkyOnce();
 
+	//! Compute DeltaT without changing the live core state. This uses the
+	//! current custom parameters directly instead of synchronizing deltaTnDot.
+	double computeDeltaTReadOnly(const double JD) const;
+
 public slots:
 	//! Smoothly move the observer to the given location
 	//! @param target the target location

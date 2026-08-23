@@ -101,3 +101,15 @@ double get_apparent_sidereal_time (double JD, double JDE)
 	return meanSidereal+ (deltaPsi*cos(getPrecessionAngleVondrakEpsilon(JDE) + deltaEps))*180./M_PI;
 }
 
+
+/* Calculate apparent sidereal time without touching the shared approximation
+ * caches. This is intended for isolated arbitrary-epoch calculations. */
+double get_apparent_sidereal_time_uncached (double JD, double JDE)
+{
+	double meanSidereal = get_mean_sidereal_time (JD, JDE);
+	double deltaPsi, deltaEps;
+	double epsilon, chi, omega, psi;
+	getNutationAnglesUncached(JDE, &deltaPsi, &deltaEps);
+	getPrecessionAnglesVondrakUncached(JDE, &epsilon, &chi, &omega, &psi);
+	return meanSidereal + (deltaPsi*cos(epsilon + deltaEps))*180./M_PI;
+}

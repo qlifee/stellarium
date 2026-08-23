@@ -16,11 +16,12 @@ them:
 This surface is sufficient to implement `StelModule` and `StelPluginInterface`,
 to use the tested `StelApp` initialization and module-lookup operations, and to
 copy the validated read-only core time/location and current Solar System body
-snapshots. It remains insufficient for most full-featured plug-ins. Installing
-a dependency header does not make all of its declarations an independent
-public API. Untested declarations, other source-tree headers, and other symbols
-visible from `stelMain.dll` are not implicitly endorsed, even if the compiler
-or linker can see them.
+snapshots. It also includes the two narrow arbitrary-date Sun-Moon samples
+documented below. It remains insufficient for most full-featured plug-ins.
+Installing a dependency header does not make all of its declarations an
+independent public API. Untested declarations, other source-tree headers, and
+other symbols visible from `stelMain.dll` are not implicitly endorsed, even if
+the compiler or linker can see them.
 
 For `StelApp`, this proof specifically validates `isInitialized()`,
 `getInstance()`, `getModule()`, and `getCore()`. Although some of these are
@@ -30,8 +31,8 @@ therefore imports the validated functions from `stelMain.dll` instead of
 directly importing private data. This is still a private C++ class ABI supported
 only by this archive's exact-build contract and required compile definitions.
 `getCore()` is validated only for obtaining the opaque pointer accepted by the
-snapshot functions below. Other inline accessors and forward-declared return
-types remain outside this proof's API surface.
+facade functions below. Other inline accessors and forward-declared return types
+remain outside this proof's API surface.
 
 ## Read-only core state snapshot
 
@@ -127,6 +128,82 @@ internal pointer. Those private headers are not part of the SDK. This stage
 also does not provide rise/set events, selection, navigation, or rendering.
 The returned `QVariantMap` and input `QString` retain the exact-build ABI
 requirements described above.
+
+## Arbitrary-date Moon-Sun conjunction sample
+
+`core/StelPluginAPI.hpp` declares:
+
+```cpp
+QVariantMap StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(
+    const StelCore* core, double julianDayTt);
+```
+
+The date is a Julian Day in TT (Stellarium's JDE time scale), not UT or local
+civil time, and must be within 200,000 Julian years of J2000. A successful
+result has exactly these fields:
+
+| Key | C++ value type | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | `int` | Sample schema version; currently `1`. |
+| `julianDayTt` | `double` | Requested TT Julian Day. |
+| `moonSunGeocentricEclipticLongitudeDifferenceDegrees` | `double` | Geometric Earth-centred Moon-minus-Sun longitude in the VSOP87/J2000 ecliptic frame, normalized to (-180, 180] degrees. |
+
+This signed value can be sampled and root-solved to locate a conjunction. It
+does not include topocentric parallax, atmosphere/refraction, aberration, or
+light-time correction. The implementation uses Earth/Moon local output buffers;
+it does not move Stellarium's clock or populate the private Planet orbit cache.
+
+## Arbitrary-date Sun-Moon visibility sample
+
+`core/StelPluginAPI.hpp` also declares:
+
+```cpp
+QVariantMap StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(
+    const StelCore* core, double julianDayUt);
+```
+
+The date is Stellarium's UT-like Julian Day, not local civil time. It is used as
+UT1 for sidereal rotation without a separate DUT1 correction. Both it and the
+derived TT date must be within 200,000 Julian years of J2000. The query uses
+Stellarium's configured Delta-T model to derive TT, then evaluates the current
+stationary Earth location. Its topocentric correction and Stellarium's physical
+Earth nutation model are applied independently of the display toggles. The
+nutation result fades to zero outside that model's configured date range. The
+query does not apply atmosphere/refraction, aberration, or light-time
+correction. Compass azimuth is in [0, 360), with north at 0 and east at 90.
+
+A successful result has exactly these fields:
+
+| Key | C++ value type | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | `int` | Sample schema version; currently `1`. |
+| `julianDayUt` | `double` | Requested UT Julian Day. |
+| `julianDayTt` | `double` | TT Julian Day derived by the host. |
+| `deltaTSeconds` | `double` | Host-model TT-minus-UT value. |
+| `sunAzimuthTopocentricGeometricDegrees` | `double` | Airless topocentric Sun compass azimuth. |
+| `sunAltitudeTopocentricGeometricDegrees` | `double` | Airless topocentric Sun-centre altitude. |
+| `moonAzimuthTopocentricGeometricDegrees` | `double` | Airless topocentric Moon compass azimuth. |
+| `moonAltitudeTopocentricGeometricDegrees` | `double` | Airless topocentric Moon-centre altitude. |
+| `moonIlluminatedFraction` | `double` | Topocentric illuminated fraction in [0, 1]. |
+| `moonAngularDiameterTopocentricUnscaledDegrees` | `double` | Natural topocentric full diameter, ignoring display scaling. |
+| `moonHorizontalParallaxGeocentricDegrees` | `double` | Geocentric lunar horizontal parallax. |
+
+Both arbitrary-date queries require the matching borrowed core pointer, a
+finite in-range date, an initialized Solar System, and a call on Stellarium's
+main thread. Invalid or unsupported input returns an empty map. Neither query
+changes the clock, time rate, location, live Sun/Moon positions, or Planet
+orbit cache.
+
+The accepted date range is a numerical safety boundary, not a promise of
+uniform scientific accuracy. Accuracy depends on the host's configured
+Delta-T and nutation models and its active JPL ephemeris or fallback VSOP87/ELP
+models.
+
+Together, these operations are sufficient for an external plug-in to search a
+geometric lunar conjunction and calculate a crescent-visibility score at a
+caller-selected UT. They do not provide rise/transit/set events, best-time
+searches, civil-day/time-zone handling, navigation, rendering, general planet
+queries, or a complete VisibilityContours port.
 
 The imported `Stellarium::stelMain` target supplies these definitions from the
 matching Stellarium build:

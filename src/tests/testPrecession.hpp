@@ -29,7 +29,8 @@ class TestPrecession : public QObject
 	Q_OBJECT
 private slots:
 	void initTestCase();	
-	void testPrecessionAnglesVondrak(); 
+	void testPrecessionAnglesVondrak();
+	void testUncachedEvaluatorsPreserveCacheAnchors();
 };
 
 #endif // _TESTPRECESSION_HPP

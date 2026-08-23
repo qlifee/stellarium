@@ -2424,11 +2424,22 @@ double StelCore::getDeltaT() const
 // compute and return DeltaT in seconds. Try not to call it directly, current DeltaT, JD, and JDE are available.
 double StelCore::computeDeltaT(const double JD)
 {
+	if (currentDeltaTAlgorithm==Custom)
+		deltaTnDot = deltaTCustomNDot;
+	return computeDeltaTReadOnly(JD);
+}
+
+// Read-only DeltaT evaluator for calculations which must not alter the live
+// core. The non-const wrapper above preserves the historical synchronization
+// of deltaTnDot for ordinary simulation updates.
+double StelCore::computeDeltaTReadOnly(const double JD) const
+{
 	double DeltaT = 0.;
+	double nDot = deltaTnDot;
 	if (currentDeltaTAlgorithm==Custom)
 	{
 		// User defined coefficients for quadratic equation for DeltaT may change frequently.
-		deltaTnDot = deltaTCustomNDot; // n.dot = custom value "/cy/cy
+		nDot = deltaTCustomNDot; // n.dot = custom value "/cy/cy
 		int year, month, day;
 		StelUtils::getDateFromJulianDay(JD, &year, &month, &day);
 		double u = (StelUtils::yearFraction(year,month,day)-getDeltaTCustomYear())/100.;
@@ -2442,7 +2453,7 @@ double StelCore::computeDeltaT(const double JD)
 	}
 
 	if (!deltaTdontUseMoon)
-		DeltaT += StelUtils::getMoonSecularAcceleration(JD, deltaTnDot, ((de440Active&&EphemWrapper::jd_fits_de440(JD)) ||
+		DeltaT += StelUtils::getMoonSecularAcceleration(JD, nDot, ((de440Active&&EphemWrapper::jd_fits_de440(JD)) ||
 										 (de441Active&&EphemWrapper::jd_fits_de441(JD)) ||
 										 (de430Active&&EphemWrapper::jd_fits_de430(JD)) ||
 										 (de431Active&&EphemWrapper::jd_fits_de431(JD))));

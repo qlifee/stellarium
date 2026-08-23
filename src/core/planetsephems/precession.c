@@ -115,65 +115,70 @@ static const double p_epsVals[10][5]=
   { 1.0/ 277.00,   193.691479,   17.703387,   -36.788069,    67.473503},
   { 1.0/ 203.00,    11.891524,   38.911307,  -170.964086,     3.014055}};
 
-// compute angles for the series we are in fact using.
-// jde: date JD_TT
-//
+// Compute angles for the series we are in fact using without touching the
+// shared approximation cache. jde: date JD_TT.
+void getPrecessionAnglesVondrakUncached(const double jde, double *epsilon_A, double *chi_A, double *omega_A, double *psi_A)
+{
+	double T=(jde-2451545.0)* (1.0/36525.0); // Julian centuries from J2000.0
+	assert(fabs(T)<=2000); // MAKES SURE YOU NEVER OVERSTRETCH THIS!
+	double T2pi= T*(2.0*M_PI); // Julian centuries from J2000.0, premultiplied by 2Pi
+	// these are actually small greek letters in the papers.
+	double Psi_A=0.0;
+	double Omega_A=0.0;
+	double Chi_A=0.0;
+	double Epsilon_A=0.0;
+	//double p_A=0.0; // currently unused. The data don't disturb.
+	int i;
+	for (i=0; i<18; ++i)
+	{
+		double invP=precVals[i][0];
+		double sin2piT_P, cos2piT_P;
+#ifdef _GNU_SOURCE
+		sincos(T2pi*invP, &sin2piT_P, &cos2piT_P);
+#else
+		double phase=T2pi*invP;
+		sin2piT_P= sin(phase);
+		cos2piT_P= cos(phase);
+#endif
+		Psi_A   += precVals[i][1]*cos2piT_P + precVals[i][4]*sin2piT_P;
+		Omega_A += precVals[i][2]*cos2piT_P + precVals[i][5]*sin2piT_P;
+		Chi_A   += precVals[i][3]*cos2piT_P + precVals[i][6]*sin2piT_P;
+	}
+
+	for (i=0; i<10; ++i)
+	{
+		double invP=p_epsVals[i][0];
+		double sin2piT_P, cos2piT_P;
+#ifdef _GNU_SOURCE
+		sincos(T2pi*invP, &sin2piT_P, &cos2piT_P);
+#else
+		double phase=T2pi*invP;
+		sin2piT_P= sin(phase);
+		cos2piT_P= cos(phase);
+#endif
+		//p_A       += p_epsVals[i][1]*cos2piT_P + p_epsVals[i][3]*sin2piT_P;
+		Epsilon_A += p_epsVals[i][2]*cos2piT_P + p_epsVals[i][4]*sin2piT_P;
+	}
+
+	Psi_A     += (( 289.e-9*T - 0.00740913)*T + 5042.7980307)*T +  8473.343527;
+	Omega_A   += (( 151.e-9*T + 0.00000146)*T -    0.4436568)*T + 84283.175915;
+	Chi_A     += (( -61.e-9*T + 0.00001472)*T +    0.0790159)*T -    19.657270;
+	//p_A       += ((271.e-9*T - 0.00710733)*T + 5043.0520035)*T +  8134.017132;
+	Epsilon_A += ((-110.e-9*T - 0.00004039)*T +    0.3624445)*T + 84028.206305;
+	*psi_A     = arcSec2Rad*Psi_A;
+	*omega_A   = arcSec2Rad*Omega_A;
+	*chi_A     = arcSec2Rad*Chi_A;
+	*epsilon_A = arcSec2Rad*Epsilon_A;
+}
+
+// Compute angles with the historical one-day approximation cache.
 void getPrecessionAnglesVondrak(const double jde, double *epsilon_A, double *chi_A, double *omega_A, double *psi_A)
 {
 	if (fabs(jde-c_lastJDE) > PRECESSION_EPOCH_THRESHOLD)
 	{
 		c_lastJDE=jde;
-		double T=(jde-2451545.0)* (1.0/36525.0); // Julian centuries from J2000.0
-		assert(fabs(T)<=2000); // MAKES SURE YOU NEVER OVERSTRETCH THIS!
-		double T2pi= T*(2.0*M_PI); // Julian centuries from J2000.0, premultiplied by 2Pi
-		// these are actually small greek letters in the papers.
-		double Psi_A=0.0;
-		double Omega_A=0.0;
-		double Chi_A=0.0;
-		double Epsilon_A=0.0;
-		//double p_A=0.0; // currently unused. The data don't disturb.
-		int i;
-		for (i=0; i<18; ++i)
-		{
-			double invP=precVals[i][0];
-			double sin2piT_P, cos2piT_P;
-#ifdef _GNU_SOURCE
-			sincos(T2pi*invP, &sin2piT_P, &cos2piT_P);
-#else
-			double phase=T2pi*invP;
-			sin2piT_P= sin(phase);
-			cos2piT_P= cos(phase);
-#endif
-			Psi_A   += precVals[i][1]*cos2piT_P + precVals[i][4]*sin2piT_P;
-			Omega_A += precVals[i][2]*cos2piT_P + precVals[i][5]*sin2piT_P;
-			Chi_A   += precVals[i][3]*cos2piT_P + precVals[i][6]*sin2piT_P;
-		}
-
-		for (i=0; i<10; ++i)
-		{
-			double invP=p_epsVals[i][0];
-			double sin2piT_P, cos2piT_P;
-#ifdef _GNU_SOURCE
-			sincos(T2pi*invP, &sin2piT_P, &cos2piT_P);
-#else
-			double phase=T2pi*invP;
-			sin2piT_P= sin(phase);
-			cos2piT_P= cos(phase);
-#endif
-			//p_A       += p_epsVals[i][1]*cos2piT_P + p_epsVals[i][3]*sin2piT_P;
-			Epsilon_A += p_epsVals[i][2]*cos2piT_P + p_epsVals[i][4]*sin2piT_P;
-		}
-
-		Psi_A     += (( 289.e-9*T - 0.00740913)*T + 5042.7980307)*T +  8473.343527;
-		Omega_A   += (( 151.e-9*T + 0.00000146)*T -    0.4436568)*T + 84283.175915;
-		Chi_A     += (( -61.e-9*T + 0.00001472)*T +    0.0790159)*T -    19.657270;
-		//p_A       += ((271.e-9*T - 0.00710733)*T + 5043.0520035)*T +  8134.017132;
-		Epsilon_A += ((-110.e-9*T - 0.00004039)*T +    0.3624445)*T + 84028.206305;
-		c_psi_A     = arcSec2Rad*Psi_A;
-		c_omega_A   = arcSec2Rad*Omega_A;
-		c_chi_A     = arcSec2Rad*Chi_A;
-		// c_p_A     = arcSec2Rad*p_A;
-		c_epsilon_A = arcSec2Rad*Epsilon_A;
+		getPrecessionAnglesVondrakUncached(jde, &c_epsilon_A,
+			&c_chi_A, &c_omega_A, &c_psi_A);
 	}
 	*psi_A     = c_psi_A;
 	*omega_A   = c_omega_A;
@@ -379,6 +384,66 @@ static double c_deltaEps=0.0;
 static double c_deltaPsi=0.0;
 static double c_jdeLastNut=-1e-100;
 
+// 1.1.-4000 and 1.1.8000, with a 100-day transition at each edge.
+#define NUT_BEGIN 260057.5
+#define NUT_END 4642999.5
+#define NUT_TRANSITION 100.0
+
+static int nutationOutsideRange(const double JDE)
+{
+	return (JDE<=NUT_BEGIN-NUT_TRANSITION) ||
+		(JDE>=NUT_END+NUT_TRANSITION);
+}
+
+static double nutationRangeLimiter(const double JDE)
+{
+	double limiter=1.0;
+	if (JDE<NUT_BEGIN)
+		limiter=1.-(NUT_BEGIN-JDE)/NUT_TRANSITION;
+	if (JDE>NUT_END)
+		limiter=1.-(JDE-NUT_END)/NUT_TRANSITION;
+	return limiter;
+}
+
+static void computeNutationAnglesBase(const double JDE,
+	double *deltaPsi, double *deltaEpsilon)
+{
+	double t=(JDE-2451545.0)/36525.0;
+	// F1 : l = mean anomaly of the Moon ['']
+	double     l  =  (485868.249036 + 1717915923.2178*t);//*arcSec2Rad;
+	// F2 : l' = mean anomaly of the Sun ['']
+	double     ls = (1287104.79305 + 129596581.0481*t);//*arcSec2Rad;
+	// F3 : F = L - Omega (L is the mean longitude of the Moon)
+	double      F = (335779.526232 + 1739527262.8478*t);//*arcSec2Rad;
+	// F4 : D = mean elongation of the Moon from the Sun
+	double      D =  (1072260.70369 + 1602961601.2090*t);//*arcSec2Rad;
+	// F5 : Omega = mean longitude of the ascending node of the lunar orbit
+	double Omega  = (450160.398036 - 6962890.5431*t);//*arcSec2Rad;
+
+	double deltaEps=0.0, deltaPsiValue=0.0;
+	int i;
+	for (i=0; i<78; ++i)
+	{
+		const struct nut2000B *nut=&nut2000Btable[i];
+		double theta=nut->l_factor*l + nut->ls_factor*ls +
+			nut->F_factor*F + nut->D_factor*D +
+			nut->Omega_factor*Omega;
+		theta *=arcSec2Rad;
+		double sinTheta=sin(theta);
+		double cosTheta=cos(theta);
+		deltaPsiValue+=(nut->A + nut->Ap*t)*sinTheta +
+			nut->App*cosTheta;
+		deltaEps+=(nut->B + nut->Bp*t)*cosTheta +
+			nut->Bpp*sinTheta;
+	}
+	deltaPsiValue *= 1e-7; // convert from units of 0.1uas to arcsec. (The paper says mas, but this is an error!)
+	deltaEps *= 1e-7;
+	deltaPsiValue -= (0.29965*t + 0.0417750 + 0.0015835);
+	deltaEps -= (0.02524*t + 0.0068192 - 0.0016339);
+	*deltaPsi = deltaPsiValue * arcSec2Rad;
+	*deltaEpsilon = deltaEps * arcSec2Rad;
+}
+
 
 //! Compute and return nutation angles of the abridged IAU-2000B nutation.
 //! Ref: Dennis D. McCarthy and Brian J. Luzum: An Abridged Model of the Precession-Nutation of the Celestial Pole.
@@ -391,68 +456,34 @@ static double c_jdeLastNut=-1e-100;
 //! we used to set the returned values to zero before 1500 and after 2500. However, for better comparison with reference values,
 //! we now provide non-zero results for the time range -4000...+8000.
 //! To avoid a jump, a linear fade-in/fade-out is applied within 100 days before and after the limit dates.
+void getNutationAnglesUncached(const double JDE, double *deltaPsi, double *deltaEpsilon)
+{
+	if (nutationOutsideRange(JDE))
+	{
+		*deltaPsi=0.0;
+		*deltaEpsilon=0.0;
+		return;
+	}
+	computeNutationAnglesBase(JDE, deltaPsi, deltaEpsilon);
+	const double limiter=nutationRangeLimiter(JDE);
+	*deltaPsi *= limiter;
+	*deltaEpsilon *= limiter;
+}
+
 void getNutationAngles(const double JDE, double *deltaPsi, double *deltaEpsilon)
 {
-// 1.1.1500
-//#define NUT_BEGIN 2268932.5
-// 1.1.-4000
-#define NUT_BEGIN 260057.5
-// 1.1.2500
-//#define NUT_END 2634166.5
-// 1.1.8000
-#define NUT_END	4642999.5
-#define NUT_TRANSITION 100.0
-	if ((JDE<=NUT_BEGIN-NUT_TRANSITION ) || (JDE>=NUT_END + NUT_TRANSITION))
+	if (nutationOutsideRange(JDE))
 	{
-			*deltaPsi=0.0;
-			*deltaEpsilon=0.0;
-			return;
+		*deltaPsi=0.0;
+		*deltaEpsilon=0.0;
+		return;
 	}
-
 	if (fabs(JDE-c_jdeLastNut)>NUTATION_EPOCH_THRESHOLD)
 	{
 		c_jdeLastNut=JDE;
-		double t=(JDE-2451545.0)/36525.0;
-		// F1 : l = mean anomaly of the Moon ['']
-		double     l  =  (485868.249036 + 1717915923.2178*t);//*arcSec2Rad;
-		// F2 : l' = mean anomaly of the Sun ['']
-		double     ls = (1287104.79305 + 129596581.0481*t);//*arcSec2Rad;
-		// F3 : F = L - Omega (L is the mean longitude of the Moon)
-		double      F = (335779.526232 + 1739527262.8478*t);//*arcSec2Rad;
-		// F4 : D = mean elongation of the Moon from the Sun
-		double      D =  (1072260.70369 + 1602961601.2090*t);//*arcSec2Rad;
-		// F5 : Omega = mean longitude of the ascending node of the lunar orbit
-		double Omega  = (450160.398036 - 6962890.5431*t);//*arcSec2Rad;
-
-		double deltaEps=0.0, deltaPsi=0.0; // lgtm [cpp/declaration-hides-parameter]
-		int i;
-		for (i=0; i<78; ++i)
-		{
-			const struct nut2000B *nut=&nut2000Btable[i];
-			double theta=nut->l_factor*l + nut->ls_factor*ls + nut->F_factor*F + nut->D_factor*D + nut->Omega_factor*Omega;
-			theta *=arcSec2Rad;
-			double sinTheta=sin(theta);
-			double cosTheta=cos(theta);
-			deltaPsi+=(nut->A + nut->Ap*t)*sinTheta + nut->App*cosTheta;
-			deltaEps+=(nut->B + nut->Bp*t)*cosTheta + nut->Bpp*sinTheta;
-		}
-		deltaPsi *= 1e-7; // convert from units of 0.1uas to arcsec. (The paper says mas, but this is an error!)
-		deltaEps *= 1e-7;
-		deltaPsi -= (0.29965*t + 0.0417750 + 0.0015835);
-		deltaEps -= (0.02524*t + 0.0068192 - 0.0016339);
-		c_deltaPsi = deltaPsi * arcSec2Rad;
-		c_deltaEps = deltaEps * arcSec2Rad;
+		computeNutationAnglesBase(JDE, &c_deltaPsi, &c_deltaEps);
 	}
-	double limiter=1.0;
-	if (JDE<NUT_BEGIN)
-	{
-		limiter=1.-(NUT_BEGIN-JDE)/NUT_TRANSITION;
-	}
-	if (JDE>NUT_END)
-	{
-		limiter=1.-(JDE-NUT_END)/NUT_TRANSITION;
-	}
-
+	const double limiter=nutationRangeLimiter(JDE);
 	*deltaPsi=c_deltaPsi*limiter;
 	*deltaEpsilon=c_deltaEps*limiter;
 }

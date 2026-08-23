@@ -24,6 +24,7 @@
 #include "tests/testPrecession.hpp"
 #include "StelUtils.hpp"
 #include "VecMath.hpp"
+#include "planetsephems/sidereal_time.h"
 
 QTEST_GUILESS_MAIN(TestPrecession)
 
@@ -117,4 +118,82 @@ void TestPrecession::testPrecessionAnglesVondrak()
 	QVERIFY2((angleCap-angleRef)*3600.0<6.0, QString("Angle between rotation matrices too different!").toUtf8());
 
 	//TODO: Add more dates and verify this angle difference is limited to what we can see in Fig.12
+}
+
+void TestPrecession::testUncachedEvaluatorsPreserveCacheAnchors()
+{
+	constexpr double baseJde = 2451545.0;
+	double cachedEpsilon, cachedChi, cachedOmega, cachedPsi;
+	double uncachedEpsilon, uncachedChi, uncachedOmega, uncachedPsi;
+
+	// Force the historical wrapper's one-day cache to the base epoch.
+	getPrecessionAnglesVondrak(baseJde - 10.0, &cachedEpsilon,
+		&cachedChi, &cachedOmega, &cachedPsi);
+	getPrecessionAnglesVondrak(baseJde, &cachedEpsilon,
+		&cachedChi, &cachedOmega, &cachedPsi);
+	getPrecessionAnglesVondrakUncached(baseJde, &uncachedEpsilon,
+		&uncachedChi, &uncachedOmega, &uncachedPsi);
+	QVERIFY(fabs(cachedEpsilon - uncachedEpsilon) < 1e-15);
+	QVERIFY(fabs(cachedChi - uncachedChi) < 1e-15);
+	QVERIFY(fabs(cachedOmega - uncachedOmega) < 1e-15);
+	QVERIFY(fabs(cachedPsi - uncachedPsi) < 1e-15);
+
+	// An isolated far-epoch computation must not move the shared cache anchor.
+	getPrecessionAnglesVondrakUncached(baseJde + 1000.0,
+		&uncachedEpsilon, &uncachedChi, &uncachedOmega, &uncachedPsi);
+	double nearbyEpsilon, nearbyChi, nearbyOmega, nearbyPsi;
+	getPrecessionAnglesVondrak(baseJde + 0.5, &nearbyEpsilon,
+		&nearbyChi, &nearbyOmega, &nearbyPsi);
+	QCOMPARE(nearbyEpsilon, cachedEpsilon);
+	QCOMPARE(nearbyChi, cachedChi);
+	QCOMPARE(nearbyOmega, cachedOmega);
+	QCOMPARE(nearbyPsi, cachedPsi);
+
+	double cachedDeltaPsi, cachedDeltaEpsilon;
+	double uncachedDeltaPsi, uncachedDeltaEpsilon;
+	getNutationAngles(baseJde - 1.0,
+		&cachedDeltaPsi, &cachedDeltaEpsilon);
+	getNutationAngles(baseJde,
+		&cachedDeltaPsi, &cachedDeltaEpsilon);
+	getNutationAnglesUncached(baseJde,
+		&uncachedDeltaPsi, &uncachedDeltaEpsilon);
+	QVERIFY(fabs(cachedDeltaPsi - uncachedDeltaPsi) < 1e-15);
+	QVERIFY(fabs(cachedDeltaEpsilon - uncachedDeltaEpsilon) < 1e-15);
+
+	getNutationAnglesUncached(baseJde + 1000.0,
+		&uncachedDeltaPsi, &uncachedDeltaEpsilon);
+	double nearbyDeltaPsi, nearbyDeltaEpsilon;
+	getNutationAngles(baseJde + 1.0/48.0,
+		&nearbyDeltaPsi, &nearbyDeltaEpsilon);
+	QCOMPARE(nearbyDeltaPsi, cachedDeltaPsi);
+	QCOMPARE(nearbyDeltaEpsilon, cachedDeltaEpsilon);
+
+	// The uncached apparent-sidereal evaluator must use the same numerical
+	// model without moving either shared cache anchor.
+	getPrecessionAnglesVondrak(baseJde - 10.0, &cachedEpsilon,
+		&cachedChi, &cachedOmega, &cachedPsi);
+	getPrecessionAnglesVondrak(baseJde, &cachedEpsilon,
+		&cachedChi, &cachedOmega, &cachedPsi);
+	getNutationAngles(baseJde - 1.0,
+		&cachedDeltaPsi, &cachedDeltaEpsilon);
+	getNutationAngles(baseJde,
+		&cachedDeltaPsi, &cachedDeltaEpsilon);
+	const double cachedSidereal =
+		get_apparent_sidereal_time(baseJde, baseJde);
+	const double uncachedSidereal =
+		get_apparent_sidereal_time_uncached(baseJde, baseJde);
+	QVERIFY(fabs(cachedSidereal - uncachedSidereal) < 1e-12);
+
+	get_apparent_sidereal_time_uncached(
+		baseJde + 1000.0, baseJde + 1000.0);
+	getPrecessionAnglesVondrak(baseJde + 0.5, &nearbyEpsilon,
+		&nearbyChi, &nearbyOmega, &nearbyPsi);
+	getNutationAngles(baseJde + 1.0/48.0,
+		&nearbyDeltaPsi, &nearbyDeltaEpsilon);
+	QCOMPARE(nearbyEpsilon, cachedEpsilon);
+	QCOMPARE(nearbyChi, cachedChi);
+	QCOMPARE(nearbyOmega, cachedOmega);
+	QCOMPARE(nearbyPsi, cachedPsi);
+	QCOMPARE(nearbyDeltaPsi, cachedDeltaPsi);
+	QCOMPARE(nearbyDeltaEpsilon, cachedDeltaEpsilon);
 }

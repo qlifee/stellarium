@@ -17,7 +17,7 @@
   "msvc_runtime": "@STELLARIUM_PLUGIN_ABI_MSVC_RUNTIME@",
   "compatibility_policy": "Plug-ins must match this exact Stellarium release and package build identity, architecture, compiler family and toolset, Qt build, build configuration, and MSVC runtime. Compatibility with other Stellarium releases or separately rebuilt packages is not guaranteed.",
   "api_scope": "api_headers are the supported entry headers. dependency_headers are installed only to satisfy their includes. supported_headers is retained as a compatibility alias for installed_headers. This proof validates only validated_operations; other declarations and exported stelMain symbols are not implicitly endorsed.",
-  "abi_notes": "In the validated MSVC DLL build, STELMAIN_USE_DLL makes the class-level STELMAIN_EXPORT resolve to Q_DECL_IMPORT, so the plug-in imports the validated StelApp operations from stelMain.dll instead of directly importing private data. StelApp::getCore() is supported only to obtain the opaque borrowed pointer accepted by the StelPluginAPI snapshot functions. Each returned QVariantMap is a copied value containing only QtCore scalar and QString payloads; it exposes no internal object layouts and returns no internal pointers. QVariantMap and QString still cross the C++ DLL boundary, so use only this exact SDK/package pair and consume all required compile definitions through Stellarium::stelMain.",
+  "abi_notes": "In the validated MSVC DLL build, STELMAIN_USE_DLL makes the class-level STELMAIN_EXPORT resolve to Q_DECL_IMPORT, so the plug-in imports the validated StelApp operations from stelMain.dll instead of directly importing private data. StelApp::getCore() is supported only to obtain the opaque borrowed pointer accepted by the validated StelPluginAPI facade functions. Each returned QVariantMap is a copied value containing only QtCore scalar and QString payloads; it exposes no internal object layouts and returns no internal pointers. QVariantMap and QString still cross the C++ DLL boundary, so use only this exact SDK/package pair and consume all required compile definitions through Stellarium::stelMain.",
   "core_state_snapshot": {
     "operation": "StelPluginAPI::getCoreStateSnapshot(const StelCore*)",
     "return_type": "QVariantMap",
@@ -76,13 +76,57 @@
     },
     "conditional_phase_contract": "The three phase fields are present together only when phaseDataAvailable is true. They are absent for the Sun or degenerate geometry."
   },
+  "moon_sun_conjunction_sample": {
+    "operation": "StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(const StelCore*, double)",
+    "return_type": "QVariantMap",
+    "time_scale_contract": "The input and returned julianDayTt are Julian Day in TT (Stellarium JDE), not UT or local civil time, and must be within 200,000 Julian years of J2000.",
+    "coordinate_contract": "The signed value is geometric Earth-centred Moon-minus-Sun longitude in Stellarium's VSOP87/J2000 ecliptic frame, normalized to (-180,180] degrees, without topocentric parallax, refraction, aberration, or light-time correction.",
+    "accuracy_contract": "The accepted date range is a numerical safety boundary, not a uniform accuracy guarantee. Accuracy depends on the host's active JPL ephemeris or fallback VSOP87/ELP models.",
+    "empty_result_behavior": "Returns an empty map for a null or foreign core, non-finite or out-of-range date, unavailable initialized Solar System state, a non-main-thread call, or invalid output.",
+    "pointer_contract": "Pass only the opaque borrowed pointer returned by StelApp::getCore() from the matching running Stellarium host; do not dereference it or retain and use it after host shutdown.",
+    "thread_contract": "Call only on the Stellarium main thread after Solar System initialization.",
+    "state_contract": "The operation does not change the host clock, time rate, location, live body positions, or Planet orbit cache.",
+    "abi_contract": "QVariantMap crosses the C++ DLL boundary and requires the exact matching Qt build, MSVC toolset, build configuration, and runtime.",
+    "fields": {
+      "schemaVersion": "int",
+      "julianDayTt": "double",
+      "moonSunGeocentricEclipticLongitudeDifferenceDegrees": "double"
+    }
+  },
+  "sun_moon_visibility_sample": {
+    "operation": "StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(const StelCore*, double)",
+    "return_type": "QVariantMap",
+    "time_scale_contract": "The input julianDayUt is Stellarium's UT-like Julian Day, not local civil time, and is used as UT1 for sidereal rotation without a separate DUT1 correction. The matching TT date is derived with the host's configured Delta-T model. Both UT and derived TT must be within 200,000 Julian years of J2000.",
+    "coordinate_contract": "Sun and Moon compass azimuth/altitude are geometric and airless for the current stationary Earth location. Topocentric parallax and Stellarium's physical Earth nutation model are applied independently of display toggles; the nutation result fades to zero outside that model's configured date range. North is 0 degrees and east is 90 degrees. Atmosphere, refraction, aberration, and light-time correction are omitted.",
+    "accuracy_contract": "The accepted date range is a numerical safety boundary, not a uniform accuracy guarantee. Accuracy depends on the host's Delta-T, nutation, and active JPL or fallback VSOP87/ELP models.",
+    "empty_result_behavior": "Returns an empty map for a null or foreign core, non-finite or out-of-range date, unavailable initialized Solar System state, unsupported or moving observer, a non-main-thread call, or invalid output.",
+    "pointer_contract": "Pass only the opaque borrowed pointer returned by StelApp::getCore() from the matching running Stellarium host; do not dereference it or retain and use it after host shutdown.",
+    "thread_contract": "Call only on the Stellarium main thread after Solar System initialization.",
+    "state_contract": "The operation does not change the host clock, time rate, location, live body positions, or Planet orbit cache.",
+    "abi_contract": "QVariantMap crosses the C++ DLL boundary and requires the exact matching Qt build, MSVC toolset, build configuration, and runtime.",
+    "fields": {
+      "schemaVersion": "int",
+      "julianDayUt": "double",
+      "julianDayTt": "double",
+      "deltaTSeconds": "double",
+      "sunAzimuthTopocentricGeometricDegrees": "double",
+      "sunAltitudeTopocentricGeometricDegrees": "double",
+      "moonAzimuthTopocentricGeometricDegrees": "double",
+      "moonAltitudeTopocentricGeometricDegrees": "double",
+      "moonIlluminatedFraction": "double",
+      "moonAngularDiameterTopocentricUnscaledDegrees": "double",
+      "moonHorizontalParallaxGeocentricDegrees": "double"
+    }
+  },
   "validated_capabilities": [
     "plugin-interface metadata",
     "module construction and initialization",
     "application initialization check",
     "application module lookup",
     "read-only current core time and location snapshot",
-    "read-only current Solar System body state snapshot"
+    "read-only current Solar System body state snapshot",
+    "read-only arbitrary-TT Moon-Sun conjunction sample",
+    "read-only arbitrary-UT Sun-Moon visibility sample"
   ],
   "validated_operations": [
     "StelModule construction and getModuleVersion()",
@@ -90,9 +134,11 @@
     "StelApp::isInitialized()",
     "StelApp::getInstance()",
     "StelApp::getModule()",
-    "StelApp::getCore() as an opaque snapshot input",
+    "StelApp::getCore() as an opaque facade input",
     "StelPluginAPI::getCoreStateSnapshot(const StelCore*)",
-    "StelPluginAPI::getSolarSystemBodyStateSnapshot(const StelCore*, const QString&)"
+    "StelPluginAPI::getSolarSystemBodyStateSnapshot(const StelCore*, const QString&)",
+    "StelPluginAPI::getMoonSunConjunctionSampleAtJulianDayTt(const StelCore*, double)",
+    "StelPluginAPI::getSunMoonVisibilitySampleAtJulianDayUt(const StelCore*, double)"
   ],
   "required_qt_components": [
 @STELLARIUM_PLUGIN_SDK_QT_COMPONENTS_JSON@
