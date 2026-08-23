@@ -65,6 +65,97 @@ jobs:
             throw "CMake configure failed with exit code $LASTEXITCODE"
           }
 
+      - name: Verify MSVC and patch-installer contracts
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $srcCmakePath = Join-Path $env:GITHUB_WORKSPACE `
+            'src/CMakeLists.txt'
+          $srcCmake = Get-Content -LiteralPath $srcCmakePath -Raw
+          $definitions = [regex]::Matches(
+            $srcCmake,
+            'TARGET_COMPILE_DEFINITIONS\s*\(\s*stelMain\b')
+          if ($definitions.Count -ne 1) {
+            throw "Expected one stelMain compile-definition block; found $($definitions.Count)"
+          }
+          $sharedSetup = [regex]::Match(
+            $srcCmake,
+            '(?s)ADD_LIBRARY\s*\(\s*stelMain\s+SHARED\b' +
+              '(?<body>.*?)TARGET_LINK_LIBRARIES\s*\(\s*stelMain\s+PUBLIC\b')
+          if (-not $sharedSetup.Success) {
+            throw 'Could not locate the shared stelMain target setup'
+          }
+          $msvcContract = '(?s)IF\s*\(\s*MSVC\s*\)' +
+            '(?:(?!ENDIF\s*\().)*' +
+            'TARGET_COMPILE_DEFINITIONS\s*\(\s*stelMain\s+' +
+            'PRIVATE\s+STELMAIN_BUILD\s+' +
+            'INTERFACE\s+STELMAIN_USE_DLL\s*\)'
+          if ($sharedSetup.Groups['body'].Value -notmatch $msvcContract) {
+            throw 'stelMain import/export definitions are not scoped to MSVC'
+          }
+
+          $stelMainProject = Get-ChildItem -Path $env:BUILD_DIR `
+            -Recurse -File -Filter 'stelMain.vcxproj' |
+            Select-Object -First 1
+          $exeProject = Get-ChildItem -Path $env:BUILD_DIR `
+            -Recurse -File -Filter 'stellarium.vcxproj' |
+            Select-Object -First 1
+          if (-not $stelMainProject -or
+              (Get-Content -LiteralPath $stelMainProject.FullName -Raw) `
+                -notmatch '\bSTELMAIN_BUILD\b') {
+            throw 'The MSVC stelMain project is missing STELMAIN_BUILD'
+          }
+          if (-not $exeProject -or
+              (Get-Content -LiteralPath $exeProject.FullName -Raw) `
+                -notmatch '\bSTELMAIN_USE_DLL\b') {
+            throw 'The MSVC launcher is missing STELMAIN_USE_DLL'
+          }
+
+          foreach ($relativePath in @(
+              'cmake/stellarium-patch.iss.cmake',
+              'cmake/stellarium-patch.iss6.cmake')) {
+            $template = Get-Content -LiteralPath `
+              (Join-Path $env:GITHUB_WORKSPACE $relativePath) -Raw
+            $count = [regex]::Matches(
+              $template,
+              [regex]::Escape('@ISS_PATCH_STELMAIN@')).Count
+            if ($count -ne 1) {
+              throw "$relativePath must contain the stelMain placeholder once; found $count"
+            }
+          }
+
+          $cache = Get-Content -LiteralPath `
+            (Join-Path $env:BUILD_DIR 'CMakeCache.txt') -Raw
+          if ($cache -notmatch '(?m)^GENERATE_STELMAINLIB:BOOL=ON\r?$') {
+            throw 'The packaging check requires GENERATE_STELMAINLIB=ON'
+          }
+          $patchPath = Join-Path $env:BUILD_DIR 'stellarium-patch.iss'
+          if (-not (Test-Path -LiteralPath $patchPath -PathType Leaf)) {
+            throw 'CMake did not generate stellarium-patch.iss'
+          }
+          $patch = Get-Content -LiteralPath $patchPath -Raw
+          if ($patch.Contains('@ISS_PATCH_STELMAIN@')) {
+            throw 'The generated patch contains an unresolved placeholder'
+          }
+          $patchLines = $patch -split '\r?\n'
+          $exeLines = @($patchLines | Where-Object {
+            $_ -match '^\s*Source:' -and
+            $_ -match '[\\/]bin[\\/]stellarium\.exe' -and
+            $_ -match 'DestDir:\s*"\{app\}"'
+          })
+          $dllLines = @($patchLines | Where-Object {
+            $_ -match '^\s*Source:' -and
+            $_ -match '[\\/]bin[\\/]\*stelMain\.dll' -and
+            $_ -match 'DestDir:\s*"\{app\}"' -and
+            $_ -match 'Flags:\s*ignoreversion'
+          })
+          if ($exeLines.Count -ne 1 -or $dllLines.Count -ne 1) {
+            throw "Expected one launcher and one stelMain DLL patch entry; found $($exeLines.Count) and $($dllLines.Count)"
+          }
+
+          "Verified: MSVC owns the explicit DLL macros and the patch installer includes stelMain.dll." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
       - name: Build
         run: |
           cmake --build $env:BUILD_DIR --config Release --parallel 4 `
@@ -126,11 +217,14 @@ jobs:
           $config = Get-Content -LiteralPath $configPath -Raw
           foreach ($requiredText in @(
               'Stellarium::stelMain',
-              'STELMAIN_USE_DLL',
               'find_dependency(Qt6 6.9.3 EXACT COMPONENTS Core Gui)')) {
             if (-not $config.Contains($requiredText)) {
               throw "Installed CMake package is missing: $requiredText"
             }
+          }
+          if ($config -notmatch `
+              'INTERFACE_COMPILE_DEFINITIONS\s+STELMAIN_USE_DLL') {
+            throw 'Installed CMake package does not import from stelMain.dll'
           }
 
           "Verified: the installed SDK contains only the required public headers, DLL/import library, and version-locked CMake metadata." |

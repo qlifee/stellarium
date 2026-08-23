@@ -591,10 +591,12 @@ ENDIF()
 # Main executable/library setup
 IF(GENERATE_STELMAINLIB)
      ADD_LIBRARY(stelMain SHARED ${stellarium_lib_SRCS} ${stellarium_RES_CXX})
-     TARGET_COMPILE_DEFINITIONS(stelMain
-          PRIVATE STELMAIN_BUILD
-          INTERFACE STELMAIN_USE_DLL)
      IF(MSVC)
+          # MinGW relies on its historical automatic export behavior. These
+          # explicit import/export definitions are only for the MSVC DLL split.
+          TARGET_COMPILE_DEFINITIONS(stelMain
+               PRIVATE STELMAIN_BUILD
+               INTERFACE STELMAIN_USE_DLL)
           # Initial proof of concept for linking third-party plug-ins. A
           # dedicated public API export macro may replace this broad export.
           # CMake's automatic export scan mistakes an MSVC PCH bookkeeping
