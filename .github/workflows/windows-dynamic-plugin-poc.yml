@@ -14,6 +14,7 @@ env:
   INSTALL_DIR: stellarium-install
   PLUGIN_BUILD_DIR: dynamic-plugin-probe-build
   DIAG_DIR: diagnostics
+  SDK_ARCHIVE_BASENAME: stellarium-26.2.0-plugin-sdk-windows-x64-msvc143-qt6.9.3-release-experimental
   CMAKE_BUILD_PARALLEL_LEVEL: 4
 
 jobs:
@@ -49,10 +50,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $installPrefix = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $sourceUrl = '{0}/{1}/commit/{2}' -f `
+            $env:GITHUB_SERVER_URL, $env:GITHUB_REPOSITORY, $env:GITHUB_SHA
+          $buildId = 'github-actions-{0}-{1}' -f `
+            $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
           cmake -S . -B $env:BUILD_DIR `
             -G 'Visual Studio 17 2022' -A x64 `
             "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR" `
             "-DCMAKE_INSTALL_PREFIX=$installPrefix" `
+            "-DSTELLARIUM_PLUGIN_SDK_SOURCE_REVISION=$env:GITHUB_SHA" `
+            "-DSTELLARIUM_PLUGIN_SDK_SOURCE_URL=$sourceUrl" `
+            "-DSTELLARIUM_PLUGIN_SDK_BUILD_ID=$buildId" `
             -DCMAKE_BUILD_TYPE=Release `
             -DGENERATE_STELMAINLIB=ON `
             -DGENERATE_PACKAGE_TARGET=OFF `
@@ -164,6 +172,212 @@ jobs:
             throw "Build failed with exit code $LASTEXITCODE"
           }
 
+      - name: Build and verify the packaged plug-in SDK
+        id: plugin_sdk
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build $env:BUILD_DIR --config Release --parallel 4 `
+            --target stellarium-plugin-sdk-archive
+          if ($LASTEXITCODE -ne 0) {
+            throw "SDK archive build failed with exit code $LASTEXITCODE"
+          }
+
+          $cache = Get-Content -LiteralPath `
+            (Join-Path $env:BUILD_DIR 'CMakeCache.txt') -Raw
+          $archiveMatch = [regex]::Match(
+            $cache,
+            '(?m)^STELLARIUM_PLUGIN_SDK_ARCHIVE:[^=]+=(.+?)\r?$')
+          if (-not $archiveMatch.Success) {
+            throw 'CMake did not publish the plug-in SDK archive path'
+          }
+          $archive = [IO.Path]::GetFullPath(
+            $archiveMatch.Groups[1].Value)
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+              (Get-Item -LiteralPath $archive).Length -eq 0) {
+            throw "SDK archive is missing or empty: $archive"
+          }
+          if ((Split-Path -Leaf $archive) -cne `
+              "$env:SDK_ARCHIVE_BASENAME.zip") {
+            throw "Unexpected SDK archive name: $archive"
+          }
+          $archiveChecksum = "$archive.sha256"
+          if (-not (Test-Path -LiteralPath $archiveChecksum -PathType Leaf)) {
+            throw "SDK archive checksum is missing: $archiveChecksum"
+          }
+          $checksumLine = Get-Content -LiteralPath $archiveChecksum -Raw
+          $checksumMatch = [regex]::Match(
+            $checksumLine.Trim(),
+            '^([0-9a-fA-F]{64})  (.+\.zip)$')
+          if (-not $checksumMatch.Success -or
+              $checksumMatch.Groups[2].Value -cne `
+                (Split-Path -Leaf $archive)) {
+            throw "Malformed SDK archive checksum: $checksumLine"
+          }
+          $archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
+            $archive).Hash.ToLowerInvariant()
+          if ($archiveHash -cne `
+              $checksumMatch.Groups[1].Value.ToLowerInvariant()) {
+            throw 'SDK archive checksum does not match the ZIP'
+          }
+
+          $extractParent = Join-Path $env:RUNNER_TEMP `
+            'Relocated Stellarium Plugin SDK'
+          if (-not $extractParent.Contains(' ')) {
+            throw 'The SDK relocation test path must contain a space'
+          }
+          if (Test-Path -LiteralPath $extractParent) {
+            throw "The SDK relocation test path is not clean: $extractParent"
+          }
+          New-Item -ItemType Directory -Path $extractParent | Out-Null
+          Expand-Archive -LiteralPath $archive `
+            -DestinationPath $extractParent
+          $topLevelEntries = @(Get-ChildItem -LiteralPath $extractParent `
+            -Force)
+          if ($topLevelEntries.Count -ne 1 -or
+              -not $topLevelEntries[0].PSIsContainer -or
+              $topLevelEntries[0].Name -cne $env:SDK_ARCHIVE_BASENAME) {
+            throw 'SDK archive must contain exactly one expected top-level directory'
+          }
+          $sdkRoot = Join-Path $extractParent $env:SDK_ARCHIVE_BASENAME
+          if (-not (Test-Path -LiteralPath $sdkRoot -PathType Container)) {
+            throw "SDK archive has no expected top-level directory: $sdkRoot"
+          }
+
+          $expectedFiles = @(
+            'COPYING',
+            'MANIFEST.sha256',
+            'README.md',
+            'bin/stelMain.dll',
+            'include/stellarium/StelMainExport.hpp',
+            'include/stellarium/core/StelModule.hpp',
+            'include/stellarium/core/StelPluginInterface.hpp',
+            'lib/cmake/Stellarium/StellariumConfig.cmake',
+            'lib/cmake/Stellarium/StellariumConfigVersion.cmake',
+            'lib/stelMain.lib',
+            'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
+          ) | Sort-Object -CaseSensitive
+          $actualFiles = @(Get-ChildItem -LiteralPath $sdkRoot `
+            -Recurse -File | ForEach-Object {
+              [IO.Path]::GetRelativePath(
+                $sdkRoot, $_.FullName).Replace('\', '/')
+            } | Sort-Object -CaseSensitive)
+          if ($actualFiles.Count -ne $expectedFiles.Count -or
+              ($actualFiles -join "`n") -cne `
+                ($expectedFiles -join "`n")) {
+            throw "Unexpected SDK ZIP manifest.`nExpected:`n$($expectedFiles -join "`n")`nActual:`n$($actualFiles -join "`n")"
+          }
+          foreach ($relativePath in $actualFiles) {
+            $path = Join-Path $sdkRoot $relativePath
+            if ((Get-Item -LiteralPath $path).Length -eq 0) {
+              throw "SDK ZIP contains an empty file: $relativePath"
+            }
+          }
+
+          $manifestPath = Join-Path $sdkRoot 'MANIFEST.sha256'
+          $manifestEntries = @{}
+          foreach ($line in Get-Content -LiteralPath $manifestPath) {
+            $match = [regex]::Match(
+              $line,
+              '^([0-9a-fA-F]{64})  (.+)$')
+            if (-not $match.Success) {
+              throw "Malformed SDK checksum entry: $line"
+            }
+            $relativePath = $match.Groups[2].Value.Replace('\', '/')
+            if ($manifestEntries.ContainsKey($relativePath)) {
+              throw "Duplicate SDK checksum entry: $relativePath"
+            }
+            $manifestEntries[$relativePath] = `
+              $match.Groups[1].Value.ToLowerInvariant()
+          }
+          $hashedFiles = @($expectedFiles | Where-Object {
+            $_ -ne 'MANIFEST.sha256'
+          })
+          if ($manifestEntries.Count -ne $hashedFiles.Count) {
+            throw 'The SDK checksum manifest has an unexpected entry count'
+          }
+          foreach ($relativePath in $hashedFiles) {
+            if (-not $manifestEntries.ContainsKey($relativePath)) {
+              throw "SDK checksum is missing: $relativePath"
+            }
+            $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
+              (Join-Path $sdkRoot $relativePath)).Hash.ToLowerInvariant()
+            if ($actualHash -cne $manifestEntries[$relativePath]) {
+              throw "SDK checksum mismatch: $relativePath"
+            }
+          }
+
+          $buildInfoPath = Join-Path $sdkRoot `
+            'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
+          $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw |
+            ConvertFrom-Json
+          $expectedBuildId = 'github-actions-{0}-{1}' -f `
+            $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+          $expectedSourceUrl = '{0}/{1}/commit/{2}' -f `
+            $env:GITHUB_SERVER_URL, $env:GITHUB_REPOSITORY, $env:GITHUB_SHA
+          if ($buildInfo.sdk_format_version -ne 1 -or
+              $buildInfo.artifact_kind -ne `
+                'experimental-minimal-plugin-sdk' -or
+              $buildInfo.stellarium_version -ne '26.2.0' -or
+              $buildInfo.source_revision -ne $env:GITHUB_SHA -or
+              $buildInfo.source_url -ne $expectedSourceUrl -or
+              $buildInfo.source_tree_state -ne 'clean' -or
+              $buildInfo.provenance_status -ne 'verified-clean' -or
+              $buildInfo.package_build_id -ne $expectedBuildId -or
+              $buildInfo.plugin_interface_iid -ne `
+                'org.stellarium.StelPluginInterface/2.0' -or
+              $buildInfo.architecture -ne 'x64' -or
+              $buildInfo.compiler_id -ne 'MSVC' -or
+              [string]::IsNullOrWhiteSpace(
+                [string]$buildInfo.compiler_version) -or
+              $buildInfo.msvc_toolset_version -ne '143' -or
+              $buildInfo.qt_version -ne '6.9.3' -or
+              $buildInfo.build_configuration -ne 'Release' -or
+              $buildInfo.msvc_runtime -ne 'MultiThreadedDLL') {
+            throw "Unexpected packaged SDK metadata: $($buildInfo | ConvertTo-Json -Compress)"
+          }
+          $expectedHeaders = @(
+            'StelMainExport.hpp',
+            'core/StelModule.hpp',
+            'core/StelPluginInterface.hpp'
+          )
+          if ((@($buildInfo.supported_headers) -join "`n") -cne `
+              ($expectedHeaders -join "`n")) {
+            throw 'The packaged SDK describes an unexpected header surface'
+          }
+
+          $configPath = Join-Path $sdkRoot `
+            'lib/cmake/Stellarium/StellariumConfig.cmake'
+          $config = (Get-Content -LiteralPath $configPath -Raw) `
+            -replace '\\', '/'
+          foreach ($forbiddenPath in @(
+              (Join-Path $env:GITHUB_WORKSPACE $env:BUILD_DIR),
+              (Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR))) {
+            $normalizedPath = $forbiddenPath -replace '\\', '/'
+            if ($config.IndexOf(
+                $normalizedPath,
+                [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+              throw "Packaged CMake metadata leaked a build path: $forbiddenPath"
+            }
+          }
+
+          $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
+          New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
+          $actualFiles | Set-Content -LiteralPath `
+            (Join-Path $diagnostics 'plugin-sdk-zip-manifest.txt') `
+            -Encoding utf8
+          Get-FileHash -Algorithm SHA256 -LiteralPath $archive |
+            Format-List | Out-String | Set-Content -LiteralPath `
+              (Join-Path $diagnostics 'plugin-sdk-zip-sha256.txt') `
+              -Encoding utf8
+
+          "STELLARIUM_SDK_ROOT=$sdkRoot" |
+            Add-Content -LiteralPath $env:GITHUB_ENV
+          "archive=$archive" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "checksum=$archiveChecksum" |
+            Add-Content -LiteralPath $env:GITHUB_OUTPUT
+          "Verified: the exact SDK ZIP is self-described, checksummed, relocatable, and has the expected minimal contents." |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
       - name: Install
         run: |
           cmake --install $env:BUILD_DIR --config Release
@@ -179,6 +393,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $diagnostics | Out-Null
 
           $sdkFiles = @(
+            'COPYING',
+            'README.md',
             'bin/stelMain.dll',
             'lib/stelMain.lib',
             'include/stellarium/StelMainExport.hpp',
@@ -202,9 +418,25 @@ jobs:
             'share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json'
           $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw |
             ConvertFrom-Json
-          if ($buildInfo.stellarium_version -ne '26.2.0' -or
+          $expectedBuildId = 'github-actions-{0}-{1}' -f `
+            $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+          $expectedSourceUrl = '{0}/{1}/commit/{2}' -f `
+            $env:GITHUB_SERVER_URL, $env:GITHUB_REPOSITORY, $env:GITHUB_SHA
+          if ($buildInfo.sdk_format_version -ne 1 -or
+              $buildInfo.artifact_kind -ne `
+                'experimental-minimal-plugin-sdk' -or
+              $buildInfo.stellarium_version -ne '26.2.0' -or
+              $buildInfo.source_revision -ne $env:GITHUB_SHA -or
+              $buildInfo.source_url -ne $expectedSourceUrl -or
+              $buildInfo.source_tree_state -ne 'clean' -or
+              $buildInfo.provenance_status -ne 'verified-clean' -or
+              $buildInfo.package_build_id -ne $expectedBuildId -or
+              $buildInfo.plugin_interface_iid -ne `
+                'org.stellarium.StelPluginInterface/2.0' -or
               $buildInfo.architecture -ne 'x64' -or
               $buildInfo.compiler_id -ne 'MSVC' -or
+              [string]::IsNullOrWhiteSpace(
+                [string]$buildInfo.compiler_version) -or
               $buildInfo.msvc_toolset_version -ne '143' -or
               $buildInfo.qt_version -ne '6.9.3' -or
               $buildInfo.build_configuration -ne 'Release' -or
@@ -227,7 +459,20 @@ jobs:
             throw 'Installed CMake package does not import from stelMain.dll'
           }
 
-          "Verified: the installed SDK contains only the required public headers, DLL/import library, and version-locked CMake metadata." |
+          $packagedRoot = $env:STELLARIUM_SDK_ROOT
+          foreach ($relativePath in @(
+              'bin/stelMain.dll',
+              'lib/stelMain.lib')) {
+            $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
+              (Join-Path $installRoot $relativePath)).Hash
+            $packagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath `
+              (Join-Path $packagedRoot $relativePath)).Hash
+            if ($installedHash -cne $packagedHash) {
+              throw "Packaged and installed SDK files differ: $relativePath"
+            }
+          }
+
+          "Verified: the installed SDK contains the required public headers, DLL/import library, and version-locked CMake metadata." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Verify DLL, import library, and exports
@@ -318,7 +563,7 @@ jobs:
           "Verified: stelMain.lib exists for external MSVC consumers." | Add-Content $env:GITHUB_STEP_SUMMARY
           "Verified: required Stellarium symbol families are exported." | Add-Content $env:GITHUB_STEP_SUMMARY
 
-      - name: Build the standalone plug-in from the installed SDK
+      - name: Build the standalone plug-in from the packaged SDK
         run: |
           $ErrorActionPreference = 'Stop'
           $fixtureSource = Join-Path $env:RUNNER_TEMP `
@@ -328,8 +573,12 @@ jobs:
             (Join-Path $env:GITHUB_WORKSPACE 'tests/plugin-sdk/*') `
             -Destination $fixtureSource -Recurse -Force
 
-          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
-          $stellariumDir = Join-Path $installRoot 'lib/cmake/Stellarium'
+          $sdkRoot = $env:STELLARIUM_SDK_ROOT
+          if (-not $sdkRoot -or
+              -not (Test-Path -LiteralPath $sdkRoot -PathType Container)) {
+            throw 'The extracted SDK root is unavailable'
+          }
+          $stellariumDir = Join-Path $sdkRoot 'lib/cmake/Stellarium'
           cmake -S $fixtureSource -B $env:PLUGIN_BUILD_DIR `
             -G 'Visual Studio 17 2022' -A x64 `
             "-DStellarium_DIR=$stellariumDir" `
@@ -346,19 +595,34 @@ jobs:
           if ($cacheText.Contains($sourceTreePath)) {
             throw 'The standalone plug-in leaked a Stellarium source-tree path'
           }
+          $installTreePath = (Join-Path `
+            $env:GITHUB_WORKSPACE $env:INSTALL_DIR) -replace '\\', '/'
+          if ($cacheText.Contains($installTreePath)) {
+            throw 'The standalone plug-in used the unarchived install tree'
+          }
+          $dirMatch = [regex]::Match(
+            $cacheText,
+            '(?m)^Stellarium_DIR:[^=]+=(.+?)\r?$')
+          $expectedDir = $stellariumDir -replace '\\', '/'
+          if (-not $dirMatch.Success -or
+              -not $dirMatch.Groups[1].Value.Equals(
+                $expectedDir,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The standalone plug-in did not resolve the extracted SDK'
+          }
 
           cmake --build $env:PLUGIN_BUILD_DIR --config Release --parallel 4
           if ($LASTEXITCODE -ne 0) {
             throw "External plug-in build failed with exit code $LASTEXITCODE"
           }
 
-          "Verified: a separate external project configured and built using only the installed Stellarium SDK." |
+          "Verified: a separate external project configured and built using only the unpacked SDK ZIP." |
             Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Inspect and load the standalone plug-in
         run: |
           $ErrorActionPreference = 'Stop'
-          $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
+          $sdkRoot = $env:STELLARIUM_SDK_ROOT
           $diagnostics = Join-Path $env:GITHUB_WORKSPACE $env:DIAG_DIR
           $probeBin = Join-Path $env:PLUGIN_BUILD_DIR 'bin'
           $plugin = Join-Path $probeBin 'libDynamicPluginProbe.dll'
@@ -426,7 +690,12 @@ jobs:
           }
 
           $spoutDir = Join-Path $env:GITHUB_WORKSPACE 'util/spout2/x64'
-          $env:PATH = "$(Join-Path $installRoot 'bin');$env:QT_ROOT_DIR\bin;$spoutDir;$env:PATH"
+          if (Test-Path -LiteralPath `
+              (Join-Path $probeBin 'stelMain.dll') -PathType Leaf) {
+            throw 'The probe build unexpectedly copied stelMain.dll locally'
+          }
+          $sdkBin = Join-Path $sdkRoot 'bin'
+          $env:PATH = "$sdkBin;$env:QT_ROOT_DIR\bin;$spoutDir;$env:PATH"
           $loaderOutputPath = Join-Path $diagnostics `
             'DynamicPluginProbe-loader.txt'
           $loaderOutput = & $loader $plugin 2>&1
@@ -470,8 +739,7 @@ jobs:
             throw "Focused tests failed with exit code $LASTEXITCODE"
           }
 
-      - name: Try full Stellarium plug-in discovery (diagnostic)
-        continue-on-error: true
+      - name: Run full Stellarium plug-in discovery
         run: |
           $ErrorActionPreference = 'Stop'
           $installRoot = Join-Path $env:GITHUB_WORKSPACE $env:INSTALL_DIR
@@ -677,6 +945,17 @@ jobs:
           }
           $metadata | ConvertTo-Json |
             Set-Content -LiteralPath (Join-Path $diagnostics 'build-metadata.json') -Encoding utf8
+
+      - name: Upload validated plug-in SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SDK_ARCHIVE_BASENAME }}
+          path: |
+            ${{ steps.plugin_sdk.outputs.archive }}
+            ${{ steps.plugin_sdk.outputs.checksum }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
       - name: Upload proof artifacts
         if: always()

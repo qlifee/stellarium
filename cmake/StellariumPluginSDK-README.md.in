@@ -1,0 +1,113 @@
+# Experimental Stellarium @VERSION@ Windows plug-in SDK
+
+This is a minimal proof SDK for building standalone C++ dynamic plug-ins for
+the matching Stellarium Windows package build. It is experimental, incomplete,
+and does not define a stable Stellarium SDK.
+
+Only these headers are supported by this archive:
+
+- `StelMainExport.hpp`
+- `core/StelModule.hpp`
+- `core/StelPluginInterface.hpp`
+
+They are sufficient to implement a minimal `StelModule` and
+`StelPluginInterface`. They are not sufficient for most full-featured plug-ins.
+Other source-tree headers and other symbols visible from `stelMain.dll` are
+implementation details, even if the linker can see them.
+
+## Exact compatibility requirement
+
+A plug-in built with this SDK is supported only with this exact combination:
+
+- Stellarium @VERSION@ from the same package build
+- Windows @STELLARIUM_PLUGIN_ABI_ARCHITECTURE@
+- @CMAKE_CXX_COMPILER_ID@ compiler family, toolset v@MSVC_TOOLSET_VERSION@
+- Qt @QT_VERSION@
+- @STELLARIUM_PLUGIN_ABI_CONFIGURATION@ configuration
+- dynamic MSVC runtime (`/MD`)
+- `StelPluginInterface` IID `org.stellarium.StelPluginInterface/2.0`
+
+The compiler build used to produce this package is recorded as diagnostic
+metadata, but the supported compiler requirement is the family and toolset.
+The exact machine-readable tuple, source revision, source-tree state, and
+package build ID are in
+`share/stellarium/plugin-sdk/StellariumPluginBuildInfo.json`. Payload file
+hashes are in `MANIFEST.sha256`.
+
+@STELLARIUM_PLUGIN_SDK_PROVENANCE_NOTICE@
+
+There is no ABI guarantee across Stellarium releases or separately rebuilt
+packages. Rebuild the plug-in for every Stellarium package it supports. Do not
+mix this archive's DLL, import library, headers, or CMake files with another
+Stellarium installation.
+
+## Build
+
+Requirements: CMake 3.18 or newer, Visual Studio with the matching
+v@MSVC_TOOLSET_VERSION@ C++ toolset, and the exact Qt package listed above.
+
+A minimal project should use the imported target:
+
+```cmake
+cmake_minimum_required(VERSION 3.18)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+project(MyPlugin LANGUAGES CXX)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreadedDLL)
+
+find_package(Stellarium @VERSION@ EXACT CONFIG REQUIRED)
+
+add_library(MyPlugin MODULE MyPlugin.cpp MyPlugin.hpp)
+target_link_libraries(MyPlugin PRIVATE Stellarium::stelMain)
+set_target_properties(MyPlugin PROPERTIES
+    PREFIX "lib"
+    OUTPUT_NAME "MyPlugin")
+```
+
+Configure a Release-only build, replacing the two paths:
+
+```powershell
+cmake -S . -B build @STELLARIUM_PLUGIN_SDK_GENERATOR_ARGUMENTS@ `
+  @STELLARIUM_PLUGIN_SDK_CONFIGURATION_ARGUMENT@ `
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL `
+  -DStellarium_DIR="C:\path\to\sdk\lib\cmake\Stellarium" `
+  -DCMAKE_PREFIX_PATH="C:\path\to\matching\Qt"
+cmake --build build @STELLARIUM_PLUGIN_SDK_BUILD_CONFIGURATION_ARGUMENT@
+```
+
+Link through `Stellarium::stelMain`; do not manually define `STELMAIN_BUILD` or
+`STELMAIN_USE_DLL`.
+
+## Install and test the plug-in
+
+For a plug-in ID `MyPlugin`, the directory, metadata ID, and library name must
+agree:
+
+```text
+%APPDATA%\Stellarium\modules\MyPlugin\libMyPlugin.dll
+```
+
+Run it only with the matching Stellarium installation. This archive contains
+`lib/stelMain.lib` for linking and the matching `bin/stelMain.dll` for isolated
+runtime validation. The DLL is not a standalone runtime: it depends on Qt and
+other runtime files supplied with Stellarium. Do not place another copy of
+`stelMain.dll` in the plug-in directory or overwrite a different Stellarium
+installation with it.
+
+## Build identity and license
+
+- Source URL: @STELLARIUM_PLUGIN_SDK_SOURCE_URL@
+- Source revision: `@STELLARIUM_PLUGIN_SDK_SOURCE_REVISION@`
+- Source-tree state: `@STELLARIUM_PLUGIN_SDK_SOURCE_TREE_STATE@`
+- Provenance status: `@STELLARIUM_PLUGIN_SDK_PROVENANCE_STATUS@`
+- Package build ID: `@STELLARIUM_PLUGIN_SDK_BUILD_ID@`
+
+This SDK, including `stelMain.dll` and `stelMain.lib`, is distributed under GNU
+GPL version 2 or later; see `COPYING`. Distribution of a binary plug-in must
+comply with the same GPL terms, including the corresponding-source
+requirements. Qt and other dependencies remain subject to their own licenses.

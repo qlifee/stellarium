@@ -609,10 +609,17 @@ IF(GENERATE_STELMAINLIB)
      ENDIF()
      TARGET_LINK_LIBRARIES(stelMain PUBLIC ${STELMAIN_DEPS})
      IF(MSVC)
+          SET(STELLARIUM_PLUGIN_SDK_COMPONENT PluginSDK)
           INSTALL(TARGETS stelMain
-               RUNTIME DESTINATION bin CONFIGURATIONS Release
-               LIBRARY DESTINATION lib CONFIGURATIONS Release
-               ARCHIVE DESTINATION lib CONFIGURATIONS Release)
+               RUNTIME DESTINATION bin
+                    CONFIGURATIONS Release
+                    COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT}
+               LIBRARY DESTINATION lib
+                    CONFIGURATIONS Release
+                    COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT}
+               ARCHIVE DESTINATION lib
+                    CONFIGURATIONS Release
+                    COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
      ELSE()
           INSTALL(TARGETS stelMain
                RUNTIME DESTINATION bin
@@ -640,6 +647,175 @@ IF(GENERATE_STELMAINLIB)
           SET(STELLARIUM_PLUGIN_SDK_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}/stellarium")
           SET(STELLARIUM_PLUGIN_SDK_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/Stellarium")
           SET(STELLARIUM_PLUGIN_SDK_DATADIR "${CMAKE_INSTALL_DATADIR}/stellarium/plugin-sdk")
+          SET(STELLARIUM_PLUGIN_SDK_SOURCE_REVISION "" CACHE STRING
+               "Source revision recorded in the Windows plug-in SDK")
+          SET(STELLARIUM_PLUGIN_SDK_SOURCE_URL
+               "https://github.com/Stellarium/stellarium" CACHE STRING
+               "Source repository recorded in the Windows plug-in SDK")
+          SET(STELLARIUM_PLUGIN_SDK_BUILD_ID "unspecified" CACHE STRING
+               "Package build identifier recorded in the Windows plug-in SDK")
+
+          # Record whether the package was built from an unmodified checkout.
+          # This remains "unknown" for source archives without Git metadata.
+          FIND_PACKAGE(Git QUIET)
+          SET(STELLARIUM_PLUGIN_SDK_SOURCE_TREE_STATE "unknown")
+          SET(_plugin_sdk_git_head_result 1)
+          SET(_plugin_sdk_git_tracked_result 1)
+          SET(_plugin_sdk_git_untracked_result 1)
+          IF(GIT_EXECUTABLE)
+               EXECUTE_PROCESS(
+                    COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+                    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+                    RESULT_VARIABLE _plugin_sdk_git_head_result
+                    OUTPUT_VARIABLE _plugin_sdk_git_head
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+               # Check tracked files without exclusions. Only the separate
+               # untracked-file check may omit generated build output.
+               EXECUTE_PROCESS(
+                    COMMAND "${GIT_EXECUTABLE}" status --porcelain
+                         --untracked-files=no -- .
+                    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+                    RESULT_VARIABLE _plugin_sdk_git_tracked_result
+                    OUTPUT_VARIABLE _plugin_sdk_git_tracked
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+               SET(_plugin_sdk_git_untracked_arguments
+                    ls-files --others --exclude-standard -- .)
+               FILE(RELATIVE_PATH _plugin_sdk_binary_relative_path
+                    "${PROJECT_SOURCE_DIR}" "${PROJECT_BINARY_DIR}")
+               IF(NOT _plugin_sdk_binary_relative_path STREQUAL "." AND
+                    NOT _plugin_sdk_binary_relative_path MATCHES "^\\.\\.")
+                    # An in-tree build directory is generated output, not a
+                    # source modification. All other untracked files count.
+                    LIST(APPEND _plugin_sdk_git_untracked_arguments
+                         ":(exclude)${_plugin_sdk_binary_relative_path}"
+                         ":(exclude)${_plugin_sdk_binary_relative_path}/**")
+               ENDIF()
+               EXECUTE_PROCESS(
+                    COMMAND "${GIT_EXECUTABLE}"
+                         ${_plugin_sdk_git_untracked_arguments}
+                    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+                    RESULT_VARIABLE _plugin_sdk_git_untracked_result
+                    OUTPUT_VARIABLE _plugin_sdk_git_untracked
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+               IF(_plugin_sdk_git_tracked_result EQUAL 0 AND
+                    _plugin_sdk_git_untracked_result EQUAL 0)
+                    IF(NOT "${_plugin_sdk_git_tracked}" STREQUAL "" OR
+                         NOT "${_plugin_sdk_git_untracked}" STREQUAL "")
+                         SET(STELLARIUM_PLUGIN_SDK_SOURCE_TREE_STATE "dirty")
+                    ELSE()
+                         SET(STELLARIUM_PLUGIN_SDK_SOURCE_TREE_STATE "clean")
+                    ENDIF()
+               ENDIF()
+          ENDIF()
+
+          IF(NOT STELLARIUM_PLUGIN_SDK_SOURCE_REVISION)
+               IF(_plugin_sdk_git_head_result EQUAL 0 AND
+                    _plugin_sdk_git_head)
+                    SET(STELLARIUM_PLUGIN_SDK_SOURCE_REVISION
+                         "${_plugin_sdk_git_head}")
+               ELSE()
+                    SET(STELLARIUM_PLUGIN_SDK_SOURCE_REVISION "unknown")
+               ENDIF()
+          ENDIF()
+          UNSET(_plugin_sdk_git_head)
+          UNSET(_plugin_sdk_git_head_result)
+          UNSET(_plugin_sdk_git_tracked)
+          UNSET(_plugin_sdk_git_tracked_result)
+          UNSET(_plugin_sdk_git_untracked)
+          UNSET(_plugin_sdk_git_untracked_arguments)
+          UNSET(_plugin_sdk_git_untracked_result)
+          UNSET(_plugin_sdk_binary_relative_path)
+
+          IF(NOT STELLARIUM_PLUGIN_SDK_SOURCE_REVISION MATCHES
+               "^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+               MESSAGE(FATAL_ERROR
+                    "STELLARIUM_PLUGIN_SDK_SOURCE_REVISION must be an immutable revision token")
+          ENDIF()
+
+          SET(STELLARIUM_PLUGIN_SDK_PROVENANCE_STATUS "verified-clean")
+          SET(STELLARIUM_PLUGIN_SDK_PROVENANCE_NOTICE
+               "This archive was packaged from the recorded clean source revision.")
+          SET(_plugin_sdk_source_url_identity
+               "${STELLARIUM_PLUGIN_SDK_SOURCE_URL}")
+          SET(_plugin_sdk_build_id_identity
+               "${STELLARIUM_PLUGIN_SDK_BUILD_ID}")
+          STRING(STRIP "${_plugin_sdk_source_url_identity}"
+               _plugin_sdk_source_url_identity)
+          STRING(STRIP "${_plugin_sdk_build_id_identity}"
+               _plugin_sdk_build_id_identity)
+          STRING(TOLOWER "${_plugin_sdk_build_id_identity}"
+               _plugin_sdk_build_id_identity_lower)
+          IF(NOT STELLARIUM_PLUGIN_SDK_SOURCE_TREE_STATE STREQUAL "clean" OR
+               STELLARIUM_PLUGIN_SDK_SOURCE_REVISION STREQUAL "unknown" OR
+               _plugin_sdk_source_url_identity STREQUAL "" OR
+               _plugin_sdk_build_id_identity STREQUAL "" OR
+               _plugin_sdk_build_id_identity_lower STREQUAL "unspecified")
+               SET(STELLARIUM_PLUGIN_SDK_PROVENANCE_STATUS "unverified")
+               SET(STELLARIUM_PLUGIN_SDK_PROVENANCE_NOTICE
+                    "**Unverified package:** this archive is for local testing and must not be published without a clean, immutable source revision and a specific package build ID.")
+          ENDIF()
+          UNSET(_plugin_sdk_source_url_identity)
+          UNSET(_plugin_sdk_build_id_identity)
+          UNSET(_plugin_sdk_build_id_identity_lower)
+
+          # Keep caller-provided package identity strings valid when embedded
+          # in the machine-readable JSON metadata.
+          FOREACH(_plugin_sdk_json_variable
+               STELLARIUM_PLUGIN_SDK_SOURCE_REVISION
+               STELLARIUM_PLUGIN_SDK_SOURCE_URL
+               STELLARIUM_PLUGIN_SDK_BUILD_ID
+               STELLARIUM_PLUGIN_SDK_SOURCE_TREE_STATE
+               STELLARIUM_PLUGIN_SDK_PROVENANCE_STATUS)
+               SET(_plugin_sdk_json_value
+                    "${${_plugin_sdk_json_variable}}")
+               STRING(REPLACE "\\" "\\\\" _plugin_sdk_json_value
+                    "${_plugin_sdk_json_value}")
+               STRING(REPLACE "\"" "\\\"" _plugin_sdk_json_value
+                    "${_plugin_sdk_json_value}")
+               STRING(REPLACE "\n" "\\n" _plugin_sdk_json_value
+                    "${_plugin_sdk_json_value}")
+               STRING(REPLACE "\r" "\\r" _plugin_sdk_json_value
+                    "${_plugin_sdk_json_value}")
+               STRING(REPLACE "\t" "\\t" _plugin_sdk_json_value
+                    "${_plugin_sdk_json_value}")
+               SET(${_plugin_sdk_json_variable}_JSON
+                    "${_plugin_sdk_json_value}")
+          ENDFOREACH()
+          UNSET(_plugin_sdk_json_value)
+          UNSET(_plugin_sdk_json_variable)
+
+          STRING(TOLOWER "${STELLARIUM_PLUGIN_ABI_CONFIGURATION}"
+               STELLARIUM_PLUGIN_SDK_CONFIGURATION_LABEL)
+          SET(STELLARIUM_PLUGIN_SDK_ARCHIVE_PROVENANCE_SUFFIX "")
+          IF(STELLARIUM_PLUGIN_SDK_PROVENANCE_STATUS STREQUAL "unverified")
+               SET(STELLARIUM_PLUGIN_SDK_ARCHIVE_PROVENANCE_SUFFIX
+                    "-unverified")
+          ENDIF()
+          SET(STELLARIUM_PLUGIN_SDK_ARCHIVE_BASENAME
+               "stellarium-${VERSION}-plugin-sdk-windows-${STELLARIUM_PLUGIN_ABI_ARCHITECTURE}-msvc${MSVC_TOOLSET_VERSION}-qt${QT_VERSION}-${STELLARIUM_PLUGIN_SDK_CONFIGURATION_LABEL}-experimental${STELLARIUM_PLUGIN_SDK_ARCHIVE_PROVENANCE_SUFFIX}")
+          SET(STELLARIUM_PLUGIN_SDK_ARCHIVE
+               "${PROJECT_BINARY_DIR}/packages/${STELLARIUM_PLUGIN_SDK_ARCHIVE_BASENAME}.zip"
+               CACHE INTERNAL "Path to the Windows plug-in SDK archive" FORCE)
+
+          SET(STELLARIUM_PLUGIN_SDK_GENERATOR_ARGUMENTS
+               "-G \"${CMAKE_GENERATOR}\"")
+          IF(CMAKE_GENERATOR_PLATFORM)
+               STRING(APPEND STELLARIUM_PLUGIN_SDK_GENERATOR_ARGUMENTS
+                    " -A ${CMAKE_GENERATOR_PLATFORM}")
+          ENDIF()
+          IF(CMAKE_CONFIGURATION_TYPES)
+               SET(STELLARIUM_PLUGIN_SDK_CONFIGURATION_ARGUMENT
+                    "-DCMAKE_CONFIGURATION_TYPES=Release")
+               SET(STELLARIUM_PLUGIN_SDK_BUILD_CONFIGURATION_ARGUMENT
+                    "--config Release")
+          ELSE()
+               SET(STELLARIUM_PLUGIN_SDK_CONFIGURATION_ARGUMENT
+                    "-DCMAKE_BUILD_TYPE=Release")
+               SET(STELLARIUM_PLUGIN_SDK_BUILD_CONFIGURATION_ARGUMENT "")
+          ENDIF()
 
           CONFIGURE_PACKAGE_CONFIG_FILE(
                "${PROJECT_SOURCE_DIR}/cmake/StellariumConfig.cmake.in"
@@ -658,25 +834,65 @@ IF(GENERATE_STELMAINLIB)
                "${PROJECT_SOURCE_DIR}/cmake/StellariumPluginBuildInfo.json.in"
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumPluginBuildInfo.json"
                @ONLY)
+          CONFIGURE_FILE(
+               "${PROJECT_SOURCE_DIR}/cmake/StellariumPluginSDK-README.md.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumPluginSDK-README.md"
+               @ONLY)
 
           INSTALL(FILES
                "${PROJECT_SOURCE_DIR}/src/StelMainExport.hpp"
                DESTINATION "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}"
-               CONFIGURATIONS Release)
+               CONFIGURATIONS Release
+               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
           INSTALL(FILES
                "${PROJECT_SOURCE_DIR}/src/core/StelModule.hpp"
                "${PROJECT_SOURCE_DIR}/src/core/StelPluginInterface.hpp"
                DESTINATION "${STELLARIUM_PLUGIN_SDK_INCLUDEDIR}/core"
-               CONFIGURATIONS Release)
+               CONFIGURATIONS Release
+               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
           INSTALL(FILES
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfig.cmake"
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumConfigVersion.cmake"
                DESTINATION "${STELLARIUM_PLUGIN_SDK_CMAKEDIR}"
-               CONFIGURATIONS Release)
+               CONFIGURATIONS Release
+               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
           INSTALL(FILES
                "${CMAKE_CURRENT_BINARY_DIR}/StellariumPluginBuildInfo.json"
                DESTINATION "${STELLARIUM_PLUGIN_SDK_DATADIR}"
-               CONFIGURATIONS Release)
+               CONFIGURATIONS Release
+               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
+          INSTALL(FILES
+               "${CMAKE_CURRENT_BINARY_DIR}/StellariumPluginSDK-README.md"
+               DESTINATION "."
+               CONFIGURATIONS Release
+               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT}
+               RENAME README.md)
+          INSTALL(FILES
+               "${PROJECT_SOURCE_DIR}/COPYING"
+               DESTINATION "."
+               CONFIGURATIONS Release
+               COMPONENT ${STELLARIUM_PLUGIN_SDK_COMPONENT})
+
+          ADD_CUSTOM_TARGET(stellarium-plugin-sdk-archive
+               COMMAND "${CMAKE_COMMAND}"
+                    "-DPLUGIN_SDK_BUILD_DIR=${PROJECT_BINARY_DIR}"
+                    "-DPLUGIN_SDK_STAGE_PARENT=${PROJECT_BINARY_DIR}/plugin-sdk-stage/$<CONFIG>"
+                    "-DPLUGIN_SDK_ARCHIVE_DIR=${PROJECT_BINARY_DIR}/packages"
+                    "-DPLUGIN_SDK_BASENAME=${STELLARIUM_PLUGIN_SDK_ARCHIVE_BASENAME}"
+                    "-DPLUGIN_SDK_CONFIGURATION=$<CONFIG>"
+                    "-DPLUGIN_SDK_COMPONENT=${STELLARIUM_PLUGIN_SDK_COMPONENT}"
+                    "-DPLUGIN_SDK_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                    "-DPLUGIN_SDK_SOURCE_REVISION=${STELLARIUM_PLUGIN_SDK_SOURCE_REVISION}"
+                    "-DPLUGIN_SDK_SOURCE_TREE_STATE=${STELLARIUM_PLUGIN_SDK_SOURCE_TREE_STATE}"
+                    "-DPLUGIN_SDK_PROVENANCE_STATUS=${STELLARIUM_PLUGIN_SDK_PROVENANCE_STATUS}"
+                    "-DPLUGIN_SDK_GIT_EXECUTABLE=${GIT_EXECUTABLE}"
+                    -P "${PROJECT_SOURCE_DIR}/cmake/BuildPluginSDKArchive.cmake"
+               COMMENT "Creating the relocatable Stellarium plug-in SDK archive"
+               VERBATIM
+               USES_TERMINAL)
+          ADD_DEPENDENCIES(stellarium-plugin-sdk-archive stelMain)
+          SET_TARGET_PROPERTIES(stellarium-plugin-sdk-archive PROPERTIES
+               FOLDER "packaging")
      ENDIF()
      # WIN32 creates a windows app without console, no effect on non-win platforms
      IF(${QT_VERSION_MAJOR} EQUAL "5")
